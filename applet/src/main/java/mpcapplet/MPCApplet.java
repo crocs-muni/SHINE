@@ -10,8 +10,7 @@ public class MPCApplet extends Applet implements MultiSelectable
 {
     public byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
     public RandomData random;
-    public MessageDigest sha256;
-    public MessageDigest sha512;
+    public MessageDigest hasher;
 
     public ECConfig ecc;
     public ECCurve curve;
@@ -33,8 +32,7 @@ public class MPCApplet extends Applet implements MultiSelectable
     public MPCApplet(byte[] buffer, short offset, byte length)
     {
         random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-        sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
-        sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
+        hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
 
         ecc = new ECConfig((short) 256);
         ecc.bnh.bIsSimulator = true;
@@ -149,10 +147,10 @@ public class MPCApplet extends Applet implements MultiSelectable
     }
 
     private void prf(short counter) {
-        sha256.reset();
-        sha256.update(identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        hasher.reset();
+        hasher.update(identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
         ramArray[0] = (byte) (counter & 0xff);
         ramArray[1] = (byte) ((counter >> 8) & 0xff);
-        sha256.doFinal(ramArray, (short) 0, (short) 2, ramArray, (short) 0);
+        hasher.doFinal(ramArray, (short) 0, (short) 2, ramArray, (short) 0);
     }
 }

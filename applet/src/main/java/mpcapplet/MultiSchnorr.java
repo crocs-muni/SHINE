@@ -4,8 +4,6 @@ import javacard.framework.*;
 
 import mpcapplet.jcmathlib.*;
 
-import javax.print.attribute.standard.MediaSize;
-
 public class MultiSchnorr {
     private MPCApplet ctx;
 
@@ -15,6 +13,7 @@ public class MultiSchnorr {
 
     private byte[] commitments;
     private byte commitmentCounter;
+    private byte revealCounter;
 
     public MultiSchnorr(MPCApplet ctx) {
         this.ctx = ctx;
@@ -54,9 +53,11 @@ public class MultiSchnorr {
         groupKey.setW(SecP256r1.G, (short) 0, SecP256r1.POINT_SIZE);
         groupKey.multiplication(groupSecret);
         groupKey.getW(ctx.ramArray, (short) 0);
-        ctx.sha256.reset();
-        ctx.sha256.doFinal(ctx.ramArray, (short) 0, SecP256r1.POINT_SIZE, apduBuffer, (short) 0);
+        ctx.hasher.reset();
+        ctx.hasher.doFinal(ctx.ramArray, (short) 0, SecP256r1.POINT_SIZE, apduBuffer, (short) 0);
         Util.arrayFillNonAtomic(commitments, (short) 0, (short) (ctx.curve.POINT_SIZE * Consts.MAX_PARTIES), (byte) 0x00);
+        commitmentCounter = 0;
+        revealCounter = 0;
         apdu.setOutgoingAndSend((short) 0, (short) 32);
     }
 
@@ -77,14 +78,20 @@ public class MultiSchnorr {
     private void keygenAddKey(APDU apdu) {
         byte[] apduBuffer = apdu.getBuffer();
         short p1 = apduBuffer[ISO7816.OFFSET_P1];
-        ctx.sha256.reset();
-        ctx.sha256.doFinal(apduBuffer, ISO7816.OFFSET_CDATA, ctx.curve.POINT_SIZE, ctx.ramArray, (short) 0);
-        if(Util.arrayCompare(ctx.ramArray, (short) 0, commitments, (short) (ctx.curve.POINT_SIZE * p1), (short) ctx.curve.POINT_SIZE) != 0) {
+        ctx.hasher.reset();
+        ctx.hasher.doFinal(apduBuffer, ISO7816.OFFSET_CDATA, ctx.curve.POINT_SIZE, ctx.ramArray, (short) 0);
+        if(Util.arrayCompare(ctx.ramArray, (short) 0, commitments, (short) (ctx.curve.POINT_SIZE * p1), ctx.curve.POINT_SIZE) != 0) {
             // TODO check failed
         }
         Util.arrayFillNonAtomic(commitments, (short) (ctx.curve.POINT_SIZE * p1), ctx.curve.POINT_SIZE, (byte) 0x00);
         ctx.tmpKey.setW(apduBuffer, ISO7816.OFFSET_CDATA, ctx.curve.POINT_SIZE);
-        groupKey.add(ctx.tmpKey);
+        if(revealCounter == 0) {
+            // TODO can be avoided by not sending card's public key
+            groupKey.copy(ctx.tmpKey);
+        } else {
+            groupKey.add(ctx.tmpKey);
+        }
+        ++revealCounter;
         apdu.setOutgoingAndSend((short) 0, (short) 0);
     }
 
