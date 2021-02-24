@@ -125,7 +125,7 @@ javacard {
             packageName 'mpcapplet'
             version '0.1'
             aid '6d:70:63:61:70:70:6c:65:74'
-            output 'jcmusig2.cap'
+            output 'mpcapplet.cap'
 
             // JC310b43 supports compilation targeting for lower API versions.
             // Here you can specify path to the SDK you want to use.

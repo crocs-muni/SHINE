@@ -1,12 +1,21 @@
 package mpcapplet;
 
 public class Consts {
+    public static final byte MAX_PARTIES = 4;
+
     public static final byte CLA_MPCAPPLET = (byte) 0xC0;
 
     public static final byte INS_GET_INFO = (byte) 0xF0;
     public static final byte INS_GET_IDENTITY = (byte) 0xF1;
-
     public static final byte INS_DEBUG_IDENTITY = (byte) 0xD1;
+
+    public static final byte CLA_MULTISCHNORR = (byte) 0xC1;
+    public static final byte INS_KEYGEN_INITIALIZE = (byte) 0xC0;
+    public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0xC1;
+    public static final byte INS_KEYGEN_REVEAL = (byte) 0xC2;
+    public static final byte INS_KEYGEN_ADD_KEY = (byte) 0xC3;
+    public static final byte INS_KEYGEN_FINALIZE = (byte) 0xC4;
+
 
     final static short SW_Exception = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;

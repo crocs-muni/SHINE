@@ -8,17 +8,22 @@ import mpcapplet.jcmathlib.*;
 
 public class MPCApplet extends Applet implements MultiSelectable
 {
-    private byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
-    private RandomData random;
-    private MessageDigest hasher;
+    public byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
+    public RandomData random;
+    public MessageDigest sha256;
+    public MessageDigest sha512;
 
-    private ECConfig ecc;
-    private ECCurve curve;
-    private Bignat curveOrder;
+    public ECConfig ecc;
+    public ECCurve curve;
+    public Bignat curveOrder;
 
-    private Bignat identitySecret;
-    private ECPoint identityKey;
+    public Bignat identitySecret;
+    public ECPoint identityKey;
 
+    public Bignat tmpSecret;
+    public ECPoint tmpKey;
+
+    private MultiSchnorr multiSchnorr;
 
     public static void install(byte[] bArray, short bOffset, byte bLength)
     {
@@ -28,7 +33,8 @@ public class MPCApplet extends Applet implements MultiSelectable
     public MPCApplet(byte[] buffer, short offset, byte length)
     {
         random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-        hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
 
         ecc = new ECConfig((short) 256);
         ecc.bnh.bIsSimulator = true;
@@ -40,11 +46,16 @@ public class MPCApplet extends Applet implements MultiSelectable
         identitySecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
         identityKey = new ECPoint(curve, ecc.ech);
 
+        tmpSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+        tmpKey = new ECPoint(curve, ecc.ech);
+
         // generate identity
         random.generateData(ramArray, (short) 0, (short) 32);
         identitySecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
         identityKey.setW(SecP256r1.G, (short) 0, SecP256r1.POINT_SIZE);
         identityKey.multiplication(identitySecret);
+
+        multiSchnorr = new MultiSchnorr(this);
 
         register();
     }
@@ -54,26 +65,16 @@ public class MPCApplet extends Applet implements MultiSelectable
         if (selectingApplet()) // ignore selection command
             return;
 
-        byte[] apduBuffer = apdu.getBuffer();
         try {
-            if (apduBuffer[ISO7816.OFFSET_CLA] == Consts.CLA_MPCAPPLET) {
-                switch(apduBuffer[ISO7816.OFFSET_INS]) {
-                    case Consts.INS_GET_INFO:
-                        getInfo(apdu);
-                        break;
-                    case Consts.INS_GET_IDENTITY:
-                        getIdentity(apdu);
-                        break;
-
-                    case Consts.INS_DEBUG_IDENTITY:
-                        debugIdentity(apdu);
-                        break;
-
-                    default:
-                        ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
-                }
-            } else {
-                ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+            switch(apdu.getBuffer()[ISO7816.OFFSET_CLA]) {
+                case Consts.CLA_MPCAPPLET:
+                    processLocal(apdu);
+                    break;
+                case Consts.CLA_MULTISCHNORR:
+                    multiSchnorr.process(apdu);
+                    break;
+                default:
+                    ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
             }
         } catch (ISOException e) {
             throw e; // Our exception from code, just re-emit
@@ -102,6 +103,25 @@ public class MPCApplet extends Applet implements MultiSelectable
         }
     }
 
+    public void processLocal(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        switch (apduBuffer[ISO7816.OFFSET_INS]) {
+            case Consts.INS_GET_INFO:
+                getInfo(apdu);
+                break;
+            case Consts.INS_GET_IDENTITY:
+                getIdentity(apdu);
+                break;
+
+            case Consts.INS_DEBUG_IDENTITY:
+                debugIdentity(apdu);
+                break;
+
+            default:
+                ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+        }
+    }
+
     public boolean select(boolean b) {
         ecc.refreshAfterReset();
         return true;
@@ -126,5 +146,13 @@ public class MPCApplet extends Applet implements MultiSelectable
         byte[] apduBuffer = apdu.getBuffer();
         Util.arrayCopyNonAtomic(identitySecret.as_byte_array(), (short) 0, apduBuffer, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
         apdu.setOutgoingAndSend((short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+    }
+
+    private void prf(short counter) {
+        sha256.reset();
+        sha256.update(identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        ramArray[0] = (byte) (counter & 0xff);
+        ramArray[1] = (byte) ((counter >> 8) & 0xff);
+        sha256.doFinal(ramArray, (short) 0, (short) 2, ramArray, (short) 0);
     }
 }
