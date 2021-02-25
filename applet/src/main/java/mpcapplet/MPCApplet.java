@@ -9,18 +9,18 @@ import mpcapplet.jcmathlib.*;
 public class MPCApplet extends Applet implements MultiSelectable
 {
     public byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
-    public RandomData random;
-    public MessageDigest hasher;
+    public RandomData random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+    public MessageDigest hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
 
-    public ECConfig ecc;
-    public ECCurve curve;
-    public Bignat curveOrder;
+    public ECConfig ecc = new ECConfig((short) 256);
+    public ECCurve curve = new ECCurve(true, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
+    public Bignat curveOrder = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
 
-    public Bignat identitySecret;
-    public ECPoint identityKey;
+    public Bignat identitySecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+    public ECPoint identityKey = new ECPoint(curve, ecc.ech);
 
-    public Bignat tmpSecret;
-    public ECPoint tmpKey;
+    public Bignat tmpSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+    public ECPoint tmpKey = new ECPoint(curve, ecc.ech);
 
     private MultiSchnorr multiSchnorr;
 
@@ -31,21 +31,9 @@ public class MPCApplet extends Applet implements MultiSelectable
 
     public MPCApplet(byte[] buffer, short offset, byte length)
     {
-        random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-        hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
-
-        ecc = new ECConfig((short) 256);
         ecc.bnh.bIsSimulator = true;
 
-        curve = new ECCurve(true, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
-        curveOrder = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
         curveOrder.from_byte_array(SecP256r1.r);
-
-        identitySecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-        identityKey = new ECPoint(curve, ecc.ech);
-
-        tmpSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-        tmpKey = new ECPoint(curve, ecc.ech);
 
         // generate identity
         random.generateData(ramArray, (short) 0, (short) 32);

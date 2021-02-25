@@ -13,10 +13,10 @@ public class MultiSchnorr {
     private ECPoint groupKey;
     private short groupSize;
 
-    private byte[] commitments;
-    private byte commitmentCounter;
-    private byte revealCounter;
-    private short nonceCounter;
+    private byte[] commitments = new byte[(short) (SecP256r1.POINT_SIZE * Consts.MAX_PARTIES)];
+    private byte commitmentCounter = 0;
+    private byte revealCounter = 0;
+    private short nonceCounter = 0;
 
     private Bignat signature;
 
@@ -24,8 +24,6 @@ public class MultiSchnorr {
         this.ctx = ctx;
         groupSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ctx.ecc.bnh);
         groupKey = new ECPoint(ctx.curve, ctx.ecc.ech);
-        commitments = new byte[(short) (SecP256r1.POINT_SIZE * Consts.MAX_PARTIES)];
-        nonceCounter = 0;
         signature = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ctx.ecc.bnh);
     }
 
