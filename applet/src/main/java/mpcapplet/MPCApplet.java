@@ -145,12 +145,4 @@ public class MPCApplet extends Applet implements MultiSelectable
         Util.arrayCopyNonAtomic(identitySecret.as_byte_array(), (short) 0, apduBuffer, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
         apdu.setOutgoingAndSend((short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
     }
-
-    private void prf(short counter) {
-        hasher.reset();
-        hasher.update(identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
-        ramArray[0] = (byte) (counter & 0xff);
-        ramArray[1] = (byte) ((counter >> 8) & 0xff);
-        hasher.doFinal(ramArray, (short) 0, (short) 2, ramArray, (short) 0);
-    }
 }

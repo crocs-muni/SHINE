@@ -15,6 +15,8 @@ public class Consts {
     public static final byte INS_KEYGEN_REVEAL = (byte) 0xC2;
     public static final byte INS_KEYGEN_ADD_KEY = (byte) 0xC3;
     public static final byte INS_KEYGEN_FINALIZE = (byte) 0xC4;
+    public static final byte INS_GET_NONCE = (byte) 0xC5;
+    public static final byte INS_SIGN = (byte) 0xC6;
 
 
     final static short SW_Exception = (short) 0xff01;

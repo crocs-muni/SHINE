@@ -4,6 +4,8 @@ import javacard.framework.*;
 
 import mpcapplet.jcmathlib.*;
 
+import javax.print.attribute.standard.MediaSize;
+
 public class MultiSchnorr {
     private MPCApplet ctx;
 
@@ -14,12 +16,17 @@ public class MultiSchnorr {
     private byte[] commitments;
     private byte commitmentCounter;
     private byte revealCounter;
+    private short nonceCounter;
+
+    private Bignat signature;
 
     public MultiSchnorr(MPCApplet ctx) {
         this.ctx = ctx;
         groupSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ctx.ecc.bnh);
         groupKey = new ECPoint(ctx.curve, ctx.ecc.ech);
         commitments = new byte[(short) (SecP256r1.POINT_SIZE * Consts.MAX_PARTIES)];
+        nonceCounter = 0;
+        signature = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ctx.ecc.bnh);
     }
 
     public void process(APDU apdu) {
@@ -38,6 +45,12 @@ public class MultiSchnorr {
                 break;
             case Consts.INS_KEYGEN_FINALIZE:
                 keygenFinalize(apdu);
+                break;
+            case Consts.INS_GET_NONCE:
+                getNonce(apdu);
+                break;
+            case Consts.INS_SIGN:
+                sign(apdu);
                 break;
 
             default:
@@ -99,5 +112,45 @@ public class MultiSchnorr {
         byte[] apduBuffer = apdu.getBuffer();
         groupKey.getW(apduBuffer, (short) 0);
         apdu.setOutgoingAndSend((short) 0, ctx.curve.POINT_SIZE);
+    }
+
+    private void getNonce(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
+        if(counter > nonceCounter) {
+            // TODO fail
+        }
+        nonceCounter = counter;
+        prf(counter);
+        ctx.tmpSecret.set_from_byte_array((short) 0, ctx.ramArray, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        ctx.tmpKey.setW(ctx.curve.G, (short) 0, ctx.curve.POINT_SIZE);
+        ctx.tmpKey.multiplication(ctx.tmpSecret);
+        ctx.tmpKey.getW(apduBuffer, (short) 0);
+        apdu.setOutgoingAndSend((short) 0, ctx.curve.POINT_SIZE);
+    }
+
+    private void sign(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
+        ctx.hasher.reset();
+        groupKey.getW(ctx.ramArray, (short) 0);
+        ctx.hasher.update(ctx.ramArray, (short) 0, ctx.curve.POINT_SIZE);
+        ctx.hasher.update(apduBuffer, ISO7816.OFFSET_CDATA, ctx.curve.POINT_SIZE);
+        ctx.hasher.doFinal(apduBuffer, (short) (ISO7816.OFFSET_CDATA + ctx.curve.POINT_SIZE), (short) 32, ctx.ramArray, (short) 0);
+        ctx.tmpSecret.set_from_byte_array((short) 0, ctx.ramArray, (short) 0, ctx.hasher.getLength());
+        signature.mod_mult(ctx.tmpSecret, groupSecret, ctx.curveOrder);
+        prf(counter);
+        ctx.tmpSecret.set_from_byte_array((short) 0, ctx.ramArray, (short) 0, ctx.hasher.getLength());
+        signature.mod_add(ctx.tmpSecret, ctx.curveOrder);
+        signature.copy_to_buffer(apduBuffer, (short) 0);
+        apdu.setOutgoingAndSend((short) 0, (short) (ctx.curve.KEY_LENGTH / 8));
+    }
+
+    private void prf(short counter) {
+        ctx.hasher.reset();
+        ctx.hasher.update(ctx.identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        ctx.ramArray[0] = (byte) (counter & 0xff);
+        ctx.ramArray[1] = (byte) ((counter >> 8) & 0xff);
+        ctx.hasher.doFinal(ctx.ramArray, (short) 0, (short) 2, ctx.ramArray, (short) 0);
     }
 }
