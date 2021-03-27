@@ -19,6 +19,7 @@ public class Consts {
     public static final byte INS_CACHE_NONCE = (byte) 0xC7;
     public static final byte INS_REVEAL_NONCE = (byte) 0xC8;
     public static final byte INS_SIGN = (byte) 0xC6;
+    public static final byte INS_SIGN_REVEAL = (byte) 0xC9;
 
     final static short SW_Exception = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;

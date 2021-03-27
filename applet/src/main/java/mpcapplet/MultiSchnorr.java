@@ -51,7 +51,10 @@ public class MultiSchnorr {
                 revealNonce(apdu);
                 break;
             case Consts.INS_SIGN:
-                sign(apdu);
+                sign(apdu, false);
+                break;
+            case Consts.INS_SIGN_REVEAL:
+                sign(apdu, true);
                 break;
 
             default:
@@ -158,7 +161,7 @@ public class MultiSchnorr {
         apdu.setOutgoingAndSend((short) 0, (short) 64);
     }
 
-    private void sign(APDU apdu) {
+    private void sign(APDU apdu, boolean reveal) {
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
         ctx.hasher.reset();
@@ -172,7 +175,16 @@ public class MultiSchnorr {
         ctx.tmpSecret.set_from_byte_array((short) 0, ctx.ramArray, (short) 0, ctx.hasher.getLength());
         signature.mod_add(ctx.tmpSecret, ctx.curveOrder);
         signature.copy_to_buffer(apduBuffer, (short) 0);
-        apdu.setOutgoingAndSend((short) 0, (short) (ctx.curve.KEY_LENGTH / 8));
+
+        if(reveal) {
+            ++counter;
+            prf(counter);
+            kdf(ctx.ramArray, (short) 0);
+            Util.arrayCopyNonAtomic(ctx.ramArray, (short) 0, apduBuffer, (short) (ctx.curve.KEY_LENGTH / 8), (short) 64);
+            apdu.setOutgoingAndSend((short) 0, (short) (ctx.curve.KEY_LENGTH / 8 + 64));
+        } else {
+            apdu.setOutgoingAndSend((short) 0, (short) (ctx.curve.KEY_LENGTH / 8));
+        }
     }
 
     private void prf(short counter) {
