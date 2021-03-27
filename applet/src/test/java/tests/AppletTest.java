@@ -4,7 +4,6 @@ import mpcapplet.Consts;
 import cardTools.RunConfig;
 import mpcapplet.jcmathlib.SecP256r1;
 import org.bouncycastle.math.ec.ECPoint;
-import org.junit.Assert;
 import org.junit.jupiter.api.*;
 
 import javax.smartcardio.CommandAPDU;
@@ -42,7 +41,7 @@ public class AppletTest extends BaseTest {
     @Test
     public void testInfo() throws Exception {
         byte[] resp = sendAPDU(Consts.CLA_MPCAPPLET, Consts.INS_GET_INFO, 0, 0).getData();
-        Assert.assertArrayEquals("MPCApplet 0.1.0".getBytes(StandardCharsets.UTF_8), resp);
+        Assertions.assertArrayEquals("MPCApplet 0.1.0".getBytes(StandardCharsets.UTF_8), resp);
     }
 
     @Test
@@ -55,13 +54,41 @@ public class AppletTest extends BaseTest {
                 break;
             }
         }
-        Assert.assertFalse(zero);
+        Assertions.assertFalse(zero);
     }
 
     @Test
     public void testIdentityKey() throws Exception {
         BigInteger priv = new BigInteger(1, pm.debugIdentity());
         ECPoint publicKey = pm.generator.multiply(priv);
-        Assert.assertTrue(publicKey.equals(pm.getIdentity()));
+        Assertions.assertTrue(publicKey.equals(pm.getIdentity()));
+    }
+
+    @Nested
+
+    class MultiSchnorrTest {
+
+        @Test
+        public ECPoint testKeygenSolo() throws Exception {
+            byte[] commitment = pm.keygenInitialize(1);
+            pm.keygenAddCommitment(0, commitment);
+            ECPoint partialPublicKey = pm.keygenReveal();
+            pm.keygenAddKey(0, partialPublicKey);
+            ECPoint groupKey = pm.keygenFinalize();
+            Assertions.assertEquals(partialPublicKey, groupKey);
+            return groupKey;
+        }
+
+        @Test
+        public void testSimpleSign() throws Exception {
+            ECPoint groupKey = testKeygenSolo();
+            ECPoint groupNonce = pm.getNonce(0);
+            byte[] message = new byte[32];
+            for(int i = 0; i < message.length; ++i) {
+                message[i] = (byte) i;
+            }
+            BigInteger scalar = pm.sign(0, groupNonce, message);
+        }
+
     }
 }
