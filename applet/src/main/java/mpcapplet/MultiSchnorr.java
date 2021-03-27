@@ -1,10 +1,7 @@
 package mpcapplet;
 
 import javacard.framework.*;
-
 import mpcapplet.jcmathlib.*;
-
-import javax.print.attribute.standard.MediaSize;
 
 public class MultiSchnorr {
     private MPCApplet ctx;
@@ -46,6 +43,12 @@ public class MultiSchnorr {
                 break;
             case Consts.INS_GET_NONCE:
                 getNonce(apdu);
+                break;
+            case Consts.INS_CACHE_NONCE:
+                cacheNonce(apdu);
+                break;
+            case Consts.INS_REVEAL_NONCE:
+                revealNonce(apdu);
                 break;
             case Consts.INS_SIGN:
                 sign(apdu);
@@ -127,6 +130,34 @@ public class MultiSchnorr {
         apdu.setOutgoingAndSend((short) 0, ctx.curve.POINT_SIZE);
     }
 
+    private void cacheNonce(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
+        prf(counter);
+        ctx.tmpSecret.set_from_byte_array((short) 0, ctx.ramArray, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        ctx.tmpKey.setW(ctx.curve.G, (short) 0, ctx.curve.POINT_SIZE);
+        ctx.tmpKey.multiplication(ctx.tmpSecret);
+        ctx.tmpKey.getW(apduBuffer, (short) 0);
+        kdf(ctx.ramArray, (short) 0);
+        for(short i = 0; i < ctx.curve.POINT_SIZE; ++i) {
+            apduBuffer[(short) (i + 1)] ^= ctx.ramArray[i];
+        }
+        apdu.setOutgoingAndSend((short) 1, (short) (ctx.curve.POINT_SIZE - 1));
+    }
+
+    private void revealNonce(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
+        if(counter > nonceCounter) {
+            // TODO fail
+        }
+        nonceCounter = counter;
+        prf(counter);
+        kdf(ctx.ramArray, (short) 0);
+        Util.arrayCopyNonAtomic(ctx.ramArray, (short) 0, apduBuffer, (short) 0, (short) 64);
+        apdu.setOutgoingAndSend((short) 0, (short) 64);
+    }
+
     private void sign(APDU apdu) {
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (apduBuffer[ISO7816.OFFSET_P1] | (apduBuffer[ISO7816.OFFSET_P2] >> 8));
@@ -150,5 +181,12 @@ public class MultiSchnorr {
         ctx.ramArray[0] = (byte) (counter & 0xff);
         ctx.ramArray[1] = (byte) ((counter >> 8) & 0xff);
         ctx.hasher.doFinal(ctx.ramArray, (short) 0, (short) 2, ctx.ramArray, (short) 0);
+    }
+
+    private void kdf(byte[] secret, short offset) {
+        ctx.hasher.reset();
+        ctx.hasher.doFinal(secret, offset, (short) 32, ctx.ramArray, (short) 0);
+        ctx.hasher.reset();
+        ctx.hasher.doFinal(ctx.ramArray, (short) 0, (short) 32, ctx.ramArray, (short) 32);
     }
 }
