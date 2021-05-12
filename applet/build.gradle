@@ -122,10 +122,10 @@ javacard {
 
         //noinspection GroovyAssignabilityCheck
         cap {
-            packageName 'mpcapplet'
+            packageName 'shine'
             version '0.1'
             aid '6d:70:63:61:70:70:6c:65:74'
-            output 'mpcapplet.cap'
+            output 'shine.cap'
 
             // JC310b43 supports compilation targeting for lower API versions.
             // Here you can specify path to the SDK you want to use.
@@ -138,7 +138,7 @@ javacard {
 
             //noinspection GroovyAssignabilityCheck
             applet {
-                className 'mpcapplet.MPCApplet'
+                className 'shine.Shine'
                 aid '6d:70:63:61:70:70:6c:65:74:61:70:70'
             }
 

@@ -3,7 +3,7 @@ package tests;
 import cardTools.CardManager;
 import cardTools.RunConfig;
 import cardTools.Util;
-import mpcapplet.MPCApplet;
+import shine.Shine;
 
 import javax.smartcardio.CardException;
 import javax.smartcardio.CommandAPDU;
@@ -17,7 +17,7 @@ import java.util.ArrayList;
  * @author Petr Svenda, Dusan Klinec (ph4r05)
  */
 public class BaseTest {
-    private static String APPLET_AID = "6a636d7573696732617070";
+    private static String APPLET_AID = "6d70636170706c6574617070";
     private static byte APPLET_AID_BYTE[] = Util.hexStringToByteArray(APPLET_AID);
 
     protected RunConfig.CARD_TYPE cardType = RunConfig.CARD_TYPE.JCARDSIMLOCAL;
@@ -56,19 +56,13 @@ public class BaseTest {
         System.setProperty("com.licel.jcardsim.object_deletion_supported", "1");
         System.setProperty("com.licel.jcardsim.sign.dsasigner.computedhash", "1");
 
-        // Set to statically seed RandomData in the applet by "02", hexcoded
-        // System.setProperty("com.licel.jcardsim.randomdata.seed", "02");
-
-        // Set to seed RandomData from the SecureRandom
-        // System.setProperty("com.licel.jcardsim.randomdata.secure", "1");
-
         runCfg.setTestCardType(cardType);
         runCfg.setTargetReaderIndex(2);
 
         // Running on physical card
         if (cardType != RunConfig.CARD_TYPE.PHYSICAL && cardType != RunConfig.CARD_TYPE.PHYSICAL_JAVAX) {
             // Running in the simulator
-            runCfg.setAppletToSimulate(MPCApplet.class)
+            runCfg.setAppletToSimulate(Shine.class)
                     .setTestCardType(RunConfig.CARD_TYPE.JCARDSIMLOCAL)
                     .setbReuploadApplet(true)
                     .setInstallData(installData);

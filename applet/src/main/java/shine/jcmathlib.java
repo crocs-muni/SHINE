@@ -1,6 +1,6 @@
 // Merged file class by JavaPresso (https://github.com/petrs/JavaPresso)
 
-package mpcapplet;
+package shine;
 
 import javacard.framework.APDU;
 import javacard.framework.Applet;

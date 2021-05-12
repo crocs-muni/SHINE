@@ -1,15 +1,13 @@
-package mpcapplet;
+package shine;
 
 public class Consts {
     public static final byte MAX_PARTIES = 4;
 
     public static final byte CLA_MPCAPPLET = (byte) 0xC0;
-
     public static final byte INS_GET_INFO = (byte) 0xF0;
     public static final byte INS_GET_IDENTITY = (byte) 0xF1;
-    public static final byte INS_DEBUG_IDENTITY = (byte) 0xD1;
 
-    public static final byte CLA_MULTISCHNORR = (byte) 0xC1;
+    public static final byte CLA_SHINE = (byte) 0xC1;
     public static final byte INS_KEYGEN_INITIALIZE = (byte) 0xC0;
     public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0xC1;
     public static final byte INS_KEYGEN_REVEAL = (byte) 0xC2;
@@ -20,6 +18,11 @@ public class Consts {
     public static final byte INS_REVEAL_NONCE = (byte) 0xC8;
     public static final byte INS_SIGN = (byte) 0xC6;
     public static final byte INS_SIGN_REVEAL = (byte) 0xC9;
+
+    static final short E_COMMITMENT_CHECK_FAILED = (short) 0xc100;
+    static final short E_USED_NONCE = (short) 0xc101;
+    static final short E_COMMITMENT_NUMBER = (short) 0xc102;
+    static final short E_KEY_NUMBER = (short) 0xc103;
 
     final static short SW_Exception = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;
