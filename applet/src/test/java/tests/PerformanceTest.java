@@ -2,6 +2,7 @@ package tests;
 
 import cardTools.RunConfig;
 import org.bouncycastle.math.ec.ECPoint;
+import org.junit.jupiter.api.Test;
 
 import java.io.FileWriter;
 import java.io.PrintWriter;
@@ -13,7 +14,8 @@ public class PerformanceTest extends BaseTest {
 
     long REPEAT = 1000;
 
-    public static void main(String[] args) throws Exception {
+    @Test
+    public void PerformanceMeasurement() throws Exception {
         new PerformanceTest().run();
     }
 

@@ -57,7 +57,7 @@ public class BaseTest {
         System.setProperty("com.licel.jcardsim.sign.dsasigner.computedhash", "1");
 
         runCfg.setTestCardType(cardType);
-        runCfg.setTargetReaderIndex(2);
+        runCfg.setTargetReaderIndex(0);
 
         // Running on physical card
         if (cardType != RunConfig.CARD_TYPE.PHYSICAL && cardType != RunConfig.CARD_TYPE.PHYSICAL_JAVAX) {

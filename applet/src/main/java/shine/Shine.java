@@ -40,7 +40,7 @@ public class Shine extends Applet implements MultiSelectable
 
     public Shine(byte[] buffer, short offset, byte length)
     {
-        ecc.bnh.bIsSimulator = false;
+        ecc.bnh.bIsSimulator = true;
 
         curveOrder.from_byte_array(SecP256r1.r);
 
