@@ -12,26 +12,19 @@ public class Shine extends Applet implements MultiSelectable
     public RandomData random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
     public MessageDigest hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
 
-    public ECConfig ecc = new ECConfig((short) 256);
-    public ECCurve curve = new ECCurve(true, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
-    public Bignat curveOrder = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+    public ECConfig ecc;
+    public ECCurve curve;
 
-    public Bignat identitySecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-    public ECPoint identityKey = new ECPoint(curve, ecc.ech);
+    public Bignat identitySecret, tmpSecret, groupSecret, signature;
+    public ECPoint identityKey, tmpKey, groupKey;
 
-    public Bignat tmpSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-    public ECPoint tmpKey = new ECPoint(curve, ecc.ech);
-
-    private Bignat groupSecret = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-    private ECPoint groupKey = new ECPoint(curve, ecc.ech);
     private short groupSize;
 
-    private byte[] commitments = new byte[(short) (SecP256r1.POINT_SIZE * Consts.MAX_PARTIES)];
+    private byte[] commitments;
     private byte commitmentCounter = 0;
     private byte revealCounter = 0;
     private short nonceCounter = 0;
 
-    private Bignat signature = new Bignat(SecP256r1.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
 
     public static void install(byte[] bArray, short bOffset, byte bLength)
     {
@@ -40,13 +33,27 @@ public class Shine extends Applet implements MultiSelectable
 
     public Shine(byte[] buffer, short offset, byte length)
     {
-        ecc.bnh.bIsSimulator = true;
+        OperationSupport.getInstance().setCard(OperationSupport.SIMULATOR);
 
-        curveOrder.from_byte_array(SecP256r1.r);
+        ecc = new ECConfig((short) 256);
+        curve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
+
+        identitySecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+        identityKey = new ECPoint(curve, ecc.ech);
+
+        tmpSecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+        tmpKey = new ECPoint(curve, ecc.ech);
+
+        groupSecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+        groupKey = new ECPoint(curve, ecc.ech);
+
+        signature = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+
+        commitments = new byte[(short) (curve.POINT_SIZE * Consts.MAX_PARTIES)];
 
         random.generateData(ramArray, (short) 0, (short) 32);
         identitySecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
-        identityKey.setW(SecP256r1.G, (short) 0, SecP256r1.POINT_SIZE);
+        identityKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
         identityKey.multiplication(identitySecret);
 
         register();
@@ -153,7 +160,7 @@ public class Shine extends Applet implements MultiSelectable
     private void getIdentity(APDU apdu) {
         byte[] apduBuffer = apdu.getBuffer();
         identityKey.getW(apduBuffer, (short) 0);
-        apdu.setOutgoingAndSend((short) 0, SecP256r1.POINT_SIZE);
+        apdu.setOutgoingAndSend((short) 0, curve.POINT_SIZE);
     }
 
     private void keygenInitialize(APDU apdu) {
@@ -161,11 +168,11 @@ public class Shine extends Applet implements MultiSelectable
         groupSize = apduBuffer[ISO7816.OFFSET_P1];
         random.generateData(ramArray, (short) 0, (short) 32);
         groupSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
-        groupKey.setW(SecP256r1.G, (short) 0, SecP256r1.POINT_SIZE);
+        groupKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
         groupKey.multiplication(groupSecret);
         groupKey.getW(ramArray, (short) 0);
         hasher.reset();
-        hasher.doFinal(ramArray, (short) 0, SecP256r1.POINT_SIZE, apduBuffer, (short) 0);
+        hasher.doFinal(ramArray, (short) 0, curve.POINT_SIZE, apduBuffer, (short) 0);
         Util.arrayFillNonAtomic(commitments, (short) 0, (short) (curve.COORD_SIZE * Consts.MAX_PARTIES), (byte) 0x00);
         commitmentCounter = 0;
         revealCounter = 0;
@@ -226,7 +233,7 @@ public class Shine extends Applet implements MultiSelectable
         }
         nonceCounter = counter;
         prf(counter);
-        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) (curve.KEY_LENGTH / 8));
         tmpKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
         tmpKey.multiplication(tmpSecret);
         tmpKey.getW(apduBuffer, (short) 0);
@@ -237,7 +244,7 @@ public class Shine extends Applet implements MultiSelectable
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
         prf(counter);
-        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) (curve.KEY_LENGTH / 8));
         tmpKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
         tmpKey.multiplication(tmpSecret);
         tmpKey.getW(apduBuffer, (short) 0);
@@ -274,10 +281,10 @@ public class Shine extends Applet implements MultiSelectable
         hasher.update(ramArray, (short) 0, curve.POINT_SIZE);
         hasher.doFinal(apduBuffer, (short) (ISO7816.OFFSET_CDATA + curve.POINT_SIZE), (short) 32, ramArray, (short) 0);
         tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
-        signature.mod_mult(tmpSecret, groupSecret, curveOrder);
+        signature.mod_mult(tmpSecret, groupSecret, curve.rBN);
         prf(counter);
         tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
-        signature.mod_add(tmpSecret, curveOrder);
+        signature.mod_add(tmpSecret, curve.rBN);
         signature.copy_to_buffer(apduBuffer, (short) 0);
 
         if(reveal) {
@@ -292,7 +299,7 @@ public class Shine extends Applet implements MultiSelectable
 
     private void prf(short counter) {
         hasher.reset();
-        hasher.update(identitySecret.as_byte_array(), (short) 0, (short) (SecP256r1.KEY_LENGTH / 8));
+        hasher.update(identitySecret.as_byte_array(), (short) 0, (short) (curve.KEY_LENGTH / 8));
         ramArray[0] = (byte) (counter & 0xff);
         ramArray[1] = (byte) ((counter >> 8) & 0xff);
         hasher.doFinal(ramArray, (short) 0, (short) 2, ramArray, (short) 0);

@@ -2,15 +2,8 @@
 
 package shine;
 
-import javacard.framework.APDU;
-import javacard.framework.Applet;
-import javacard.framework.CardRuntimeException;
-import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
-import javacard.framework.PINException;
-import javacard.framework.SystemException;
-import javacard.framework.TransactionException;
 import javacard.framework.Util;
 import javacard.security.CryptoException;
 import javacard.security.ECPrivateKey;
@@ -30,17 +23,12 @@ public class jcmathlib {
      */
     static class ECPoint_Helper extends Base_Helper {
         // Selected constants missing from older JC API specs
-        public static final byte KeyAgreement_ALG_EC_SVDP_DH_PLAIN = (byte) 3;
-        public static final byte KeyAgreement_ALG_EC_SVDP_DH_PLAIN_XY = (byte) 6;
-        public static final byte Signature_ALG_ECDSA_SHA_256 = (byte) 33;
-
-        /**
-         * I true, fast multiplication of ECPoints via KeyAgreement can be used Is
-         * set automatically after successful allocation of required engines
-         */
-        public boolean FLAG_FAST_EC_MULT_VIA_KA = false;
+        public static final byte ALG_EC_SVDP_DH_PLAIN = (byte) 3;
+        public static final byte ALG_EC_SVDP_DH_PLAIN_XY = (byte) 6;
+        public static final byte ALG_ECDSA_SHA_256 = (byte) 33;
 
         byte[] uncompressed_point_arr1;
+        byte[] uncompressed_point_arr2;
         byte[] fnc_isEqual_hashArray;
         byte[] fnc_multiplication_resultArray;
 
@@ -61,23 +49,19 @@ public class jcmathlib {
         Bignat fnc_multiplication_y2; // mostly just read, result write
         Bignat fnc_negate_yBN; // mostly just read, result write
 
-        KeyAgreement fnc_multiplication_x_keyAgreement;
+        KeyAgreement multKA;
         Signature    fnc_SignVerifyECDSA_signEngine;
         MessageDigest fnc_isEqual_hashEngine;
 
         public ECPoint_Helper(ResourceManager rm) {
             super(rm);
 
-            FLAG_FAST_EC_MULT_VIA_KA = false; // set true only if succesfully allocated and tested below
-            try {
-                //fnc_multiplication_x_keyAgreement = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DHC, false);
-                //fnc_SignVerifyECDSA_signEngine = Signature.getInstance(Signature.ALG_ECDSA_SHA, false);
-                //fnc_multiplication_x_keyAgreement = KeyAgreement.getInstance(KeyAgreement_ALG_EC_SVDP_DH_PLAIN_XY, false);
-                fnc_multiplication_x_keyAgreement = KeyAgreement.getInstance(KeyAgreement_ALG_EC_SVDP_DH_PLAIN, false);
-                fnc_SignVerifyECDSA_signEngine = Signature.getInstance(Signature_ALG_ECDSA_SHA_256, false);
-                FLAG_FAST_EC_MULT_VIA_KA = true;
-            } catch (Exception ignored) {
-            } // Discard any exception
+            if(OperationSupport.getInstance().ECDH_XY) {
+                multKA = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN_XY, false);
+            } else if(OperationSupport.getInstance().ECDH_X_ONLY) {
+                multKA = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN, false);
+            }
+            fnc_SignVerifyECDSA_signEngine = Signature.getInstance(ALG_ECDSA_SHA_256, false);
         }
 
         void initialize() {
@@ -108,6 +92,7 @@ public class jcmathlib {
             fnc_isEqual_hashEngine = rm.hashEngine;
 
             uncompressed_point_arr1 = rm.helper_uncompressed_point_arr1;
+            uncompressed_point_arr2 = rm.helper_uncompressed_point_arr2;
 
         }
 
@@ -115,7 +100,7 @@ public class jcmathlib {
 
     /**
      *
-    * @author Vasilios Mavroudis and Petr Svenda
+     * @author Vasilios Mavroudis and Petr Svenda
      */
     static class ReturnCodes {
         // Custom error response codes
@@ -132,6 +117,7 @@ public class jcmathlib {
         public static final short SW_ECPOINT_INVALIDLENGTH          = (short) 0x700a;
         public static final short SW_ECPOINT_UNEXPECTED_KA_LEN      = (short) 0x700b;
         public static final short SW_ALLOCATOR_INVALIDOBJID         = (short) 0x700c;
+        public static final short SW_OPERATION_NOT_SUPPORTED        = (short) 0x700d;
 
 
         // Specific codes to propagate exceptions cought
@@ -189,18 +175,6 @@ public class jcmathlib {
         public final void updatePointObjects() {
             this.thePointKeyPair = this.theCurve.newKeyPair(this.thePointKeyPair);
             this.thePoint = (ECPublicKey) thePointKeyPair.getPublic();
-        }
-        /**
-         * Generates new random point value.
-         */
-        public void randomize(){
-            if (this.thePointKeyPair == null) {
-                this.thePointKeyPair = this.theCurve.newKeyPair(this.thePointKeyPair);
-                this.thePoint = (ECPublicKey) thePointKeyPair.getPublic();
-            }
-            else {
-                this.thePointKeyPair.genKeyPair();
-            }
         }
 
         /**
@@ -288,6 +262,7 @@ public class jcmathlib {
             ech.unlock(ech.uncompressed_point_arr1);
             return this.theCurve.COORD_SIZE;
         }
+
         /**
          * Returns the Y coordinate of this point in form of Bignat object.
          *
@@ -296,9 +271,6 @@ public class jcmathlib {
         public void getY(Bignat yCopy) {
             yCopy.set_size(this.getY(yCopy.as_byte_array(), (short) 0));
         }
-
-
-
 
         /**
          * Doubles the current value of this point.
@@ -315,9 +287,11 @@ public class jcmathlib {
          * @param other point to be added to this.
          */
         public void add(ECPoint other) {
-            PM.check(PM.TRAP_ECPOINT_ADD_1);
-
             boolean samePoint = this == other || isEqual(other);
+            if (samePoint && OperationSupport.getInstance().ECDH_XY) {
+                this.multiplication(Bignat_Helper.TWO);
+                return;
+            }
 
             ech.lock(ech.uncompressed_point_arr1);
             this.thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
@@ -328,8 +302,6 @@ public class jcmathlib {
             ech.fnc_add_y_p.set_size(this.theCurve.COORD_SIZE);
             ech.fnc_add_y_p.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
             ech.unlock(ech.uncompressed_point_arr1);
-
-            PM.check(PM.TRAP_ECPOINT_ADD_2);
 
             // l = (y_q-y_p)/(x_q-x_p))
             // x_r = l^2 - x_p -x_q
@@ -361,19 +333,15 @@ public class jcmathlib {
                 ech.fnc_add_nominator.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
                 ech.unlock(ech.uncompressed_point_arr1);
 
-                PM.check(PM.TRAP_ECPOINT_ADD_3);
                 ech.fnc_add_nominator.mod(this.theCurve.pBN);
-                PM.check(PM.TRAP_ECPOINT_ADD_4);
 
                 ech.fnc_add_nominator.mod_sub(ech.fnc_add_y_p, this.theCurve.pBN);
 
                 // (x_q-x_p)
                 ech.fnc_add_denominator.clone(ech.fnc_add_x_q);
                 ech.fnc_add_denominator.mod(this.theCurve.pBN);
-                PM.check(PM.TRAP_ECPOINT_ADD_5);
                 ech.fnc_add_denominator.mod_sub(ech.fnc_add_x_p, this.theCurve.pBN);
                 ech.fnc_add_denominator.mod_inv(this.theCurve.pBN);
-                PM.check(PM.TRAP_ECPOINT_ADD_6);
             }
 
             ech.fnc_add_lambda.lock();
@@ -382,7 +350,6 @@ public class jcmathlib {
             ech.fnc_add_lambda.mod_mult(ech.fnc_add_nominator, ech.fnc_add_denominator, this.theCurve.pBN);
             ech.fnc_add_nominator.unlock();
             ech.fnc_add_denominator.unlock();
-            PM.check(PM.TRAP_ECPOINT_ADD_7);
 
             // (x_p,y_p)+(x_q,y_q)=(x_r,y_r)
             // lambda=(y_q-y_p)/(x_q-x_p)
@@ -390,7 +357,7 @@ public class jcmathlib {
             //x_r=lambda^2-x_p-x_q
             ech.fnc_add_x_r.lock();
             if (samePoint) {
-                short len = this.multiplication_x(Bignat_Helper.TWO, ech.fnc_add_x_r.as_byte_array(), (short) 0);
+                short len = this.multiplication_x_KA(Bignat_Helper.TWO, ech.fnc_add_x_r.as_byte_array(), (short) 0);
                 ech.fnc_add_x_r.set_size(len);
             } else {
                 ech.fnc_add_x_r.clone(ech.fnc_add_lambda);
@@ -399,20 +366,16 @@ public class jcmathlib {
                 ech.fnc_add_x_r.mod_sub(ech.fnc_add_x_p, this.theCurve.pBN);
                 ech.fnc_add_x_r.mod_sub(ech.fnc_add_x_q, this.theCurve.pBN);
                 ech.fnc_add_x_q.unlock();
-                PM.check(PM.TRAP_ECPOINT_ADD_8);
             }
             //y_r=lambda(x_p-x_r)-y_p
             ech.fnc_add_y_r.lock();
             ech.fnc_add_y_r.clone(ech.fnc_add_x_p);
             ech.fnc_add_x_p.unlock();
             ech.fnc_add_y_r.mod_sub(ech.fnc_add_x_r, this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_ADD_9);
             ech.fnc_add_y_r.mod_mult(ech.fnc_add_y_r, ech.fnc_add_lambda, this.theCurve.pBN);
             ech.fnc_add_lambda.unlock();
-            PM.check(PM.TRAP_ECPOINT_ADD_10);
             ech.fnc_add_y_r.mod_sub(ech.fnc_add_y_p, this.theCurve.pBN);
             ech.fnc_add_y_p.unlock();
-            PM.check(PM.TRAP_ECPOINT_ADD_11);
 
             ech.lock(ech.uncompressed_point_arr1);
             ech.uncompressed_point_arr1[0] = (byte)0x04;
@@ -421,10 +384,8 @@ public class jcmathlib {
             ech.fnc_add_x_r.unlock();
             ech.fnc_add_y_r.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
             ech.fnc_add_y_r.unlock();
-            PM.check(PM.TRAP_ECPOINT_ADD_12);
             this.setW(ech.uncompressed_point_arr1, (short) 0, this.theCurve.POINT_SIZE);
             ech.unlock(ech.uncompressed_point_arr1);
-            PM.check(PM.TRAP_ECPOINT_ADD_13);
         }
 
         /**
@@ -440,36 +401,72 @@ public class jcmathlib {
             multiplication(ech.fnc_multiplication_scalar);
             ech.fnc_multiplication_scalar.unlock();
         }
+
         /**
          * Multiply value of this point by provided scalar. Stores the result into this point.
          * @param scalar value of scalar for multiplication
          */
         public void multiplication(Bignat scalar) {
-            PM.check(PM.TRAP_ECPOINT_MULT_1);
+            if (ech.multKA.getAlgorithm() == ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN_XY) {
+                this.multiplication_xy(scalar);
+            } else if (ech.multKA.getAlgorithm() == ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN) {
+                this.multiplication_x(scalar);
+            } else {
+                ISOException.throwIt(ReturnCodes.SW_OPERATION_NOT_SUPPORTED);
+            }
+        }
 
+        /**
+         * Multiply value of this point by provided scalar using X-only key agreement. Stores the result into this point.
+         * @param scalar value of scalar for multiplication
+         */
+        public void multiplication_xy(Bignat scalar) {
+            ech.lock(ech.uncompressed_point_arr2);
+            short len = multiplication_xy_KA(scalar, ech.uncompressed_point_arr2, (short) 0);
+            this.setW(ech.uncompressed_point_arr2, (short) 0, len);
+            ech.unlock(ech.uncompressed_point_arr2);
+        }
+
+        /**
+         * Multiplies this point value with provided scalar and stores result into
+         * provided array. No modification of this point is performed.
+         * Native KeyAgreement engine is used.
+         *
+         * @param scalar value of scalar for multiplication
+         * @param outBuffer output array for resulting value
+         * @param outBufferOffset offset within output array
+         * @return length of resulting value (in bytes)
+         */
+        public short multiplication_xy_KA(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
+            theCurve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
+            ech.multKA.init(theCurve.disposable_priv);
+
+            ech.lock(ech.uncompressed_point_arr1);
+            short len = this.getW(ech.uncompressed_point_arr1, (short) 0);
+            len = ech.multKA.generateSecret(ech.uncompressed_point_arr1, (short) 0, len, outBuffer, outBufferOffset);
+            ech.unlock(ech.uncompressed_point_arr1);
+            return len;
+        }
+
+        /**
+         * Multiply value of this point by provided scalar using X-only key agreement. Stores the result into this point.
+         * @param scalar value of scalar for multiplication
+         */
+        public void multiplication_x(Bignat scalar) {
             ech.fnc_multiplication_x.lock();
-            short len = this.multiplication_x(scalar, ech.fnc_multiplication_x.as_byte_array(), (short) 0);
+            short len = this.multiplication_x_KA(scalar, ech.fnc_multiplication_x.as_byte_array(), (short) 0);
             ech.fnc_multiplication_x.set_size(len);
-            PM.check(PM.TRAP_ECPOINT_MULT_2);
-
             //Y^2 = X^3 + XA + B = x(x^2+A)+B
             ech.fnc_multiplication_y_sq.lock();
             ech.fnc_multiplication_y_sq.clone(ech.fnc_multiplication_x);
-            PM.check(PM.TRAP_ECPOINT_MULT_3);
             ech.fnc_multiplication_y_sq.mod_exp(Bignat_Helper.TWO, this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_MULT_4);
             ech.fnc_multiplication_y_sq.mod_add(this.theCurve.aBN, this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_MULT_5);
             ech.fnc_multiplication_y_sq.mod_mult(ech.fnc_multiplication_y_sq, ech.fnc_multiplication_x, this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_MULT_6);
             ech.fnc_multiplication_y_sq.mod_add(this.theCurve.bBN, this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_MULT_7);
             ech.fnc_multiplication_y1.lock();
             ech.fnc_multiplication_y1.clone(ech.fnc_multiplication_y_sq);
             ech.fnc_multiplication_y_sq.unlock();
-            PM.check(PM.TRAP_ECPOINT_MULT_8);
             ech.fnc_multiplication_y1.sqrt_FP(this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_MULT_9);
 
             // Construct public key with <x, y_1>
             ech.lock(ech.uncompressed_point_arr1);
@@ -478,7 +475,6 @@ public class jcmathlib {
             ech.fnc_multiplication_x.unlock();
             ech.fnc_multiplication_y1.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + theCurve.COORD_SIZE));
             this.setW(ech.uncompressed_point_arr1, (short) 0, theCurve.POINT_SIZE); //So that we can convert to pub key
-            PM.check(PM.TRAP_ECPOINT_MULT_10);
 
             // Check if public point <x, y_1> corresponds to the "secret" (i.e., our scalar)
             ech.lock(ech.fnc_multiplication_resultArray);
@@ -492,24 +488,8 @@ public class jcmathlib {
             ech.unlock(ech.fnc_multiplication_resultArray);
             ech.fnc_multiplication_y1.unlock();
 
-            PM.check(PM.TRAP_ECPOINT_MULT_11);
-
             this.setW(ech.uncompressed_point_arr1, (short)0, theCurve.POINT_SIZE);
             ech.unlock(ech.uncompressed_point_arr1);
-
-            PM.check(PM.TRAP_ECPOINT_MULT_12);
-        }
-
-        /**
-         * Multiplies this point value with provided scalar and stores result into provided array.
-         * No modification of this point is performed.
-         * @param scalar value of scalar for multiplication
-         * @param outBuffer output array for resulting value
-         * @param outBufferOffset offset within output array
-         * @return length of resulting value (in bytes)
-         */
-        public short multiplication_x(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
-            return multiplication_x_KA(scalar, outBuffer, outBufferOffset);
         }
 
 
@@ -523,21 +503,15 @@ public class jcmathlib {
          * @param outBufferOffset offset within output array
          * @return length of resulting value (in bytes)
          */
-        private short multiplication_x_KA(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
+        public short multiplication_x_KA(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
             // NOTE: potential problem on real cards (j2e) - when small scalar is used (e.g., Bignat.TWO), operation sometimes freezes
-            PM.check(PM.TRAP_ECPOINT_MULT_X_1);
             theCurve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
-            PM.check(PM.TRAP_ECPOINT_MULT_X_2);
-
-            ech.fnc_multiplication_x_keyAgreement.init(theCurve.disposable_priv);
-            PM.check(PM.TRAP_ECPOINT_MULT_X_3);
+            ech.multKA.init(theCurve.disposable_priv);
 
             ech.lock(ech.uncompressed_point_arr1);
             short len = this.getW(ech.uncompressed_point_arr1, (short) 0);
-            PM.check(PM.TRAP_ECPOINT_MULT_X_4);
-            len = ech.fnc_multiplication_x_keyAgreement.generateSecret(ech.uncompressed_point_arr1, (short) 0, len, outBuffer, outBufferOffset);
+            len = ech.multKA.generateSecret(ech.uncompressed_point_arr1, (short) 0, len, outBuffer, outBufferOffset);
             ech.unlock(ech.uncompressed_point_arr1);
-            PM.check(PM.TRAP_ECPOINT_MULT_X_5);
             // Return always length of whole coordinate X instead of len - some real cards returns shorter value equal to SHA-1 output size although PLAIN results is filled into buffer (GD60)
             return this.theCurve.COORD_SIZE;
         }
@@ -546,25 +520,19 @@ public class jcmathlib {
          * Computes negation of this point.
          */
         public void negate() {
-            PM.check(PM.TRAP_ECPOINT_NEGATE_1);
-
             // Operation will dump point into uncompressed_point_arr, negate Y and restore back
             ech.fnc_negate_yBN.lock();
             ech.lock(ech.uncompressed_point_arr1);
             thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            PM.check(PM.TRAP_ECPOINT_NEGATE_2);
             ech.fnc_negate_yBN.set_size(this.theCurve.COORD_SIZE);
             ech.fnc_negate_yBN.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-            PM.check(PM.TRAP_ECPOINT_NEGATE_3);
             ech.fnc_negate_yBN.mod_negate(this.theCurve.pBN);
-            PM.check(PM.TRAP_ECPOINT_NEGATE_4);
 
             // Restore whole point back
             ech.fnc_negate_yBN.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
             ech.fnc_negate_yBN.unlock();
             this.setW(ech.uncompressed_point_arr1, (short) 0, this.theCurve.POINT_SIZE);
             ech.unlock(ech.uncompressed_point_arr1);
-            PM.check(PM.TRAP_ECPOINT_NEGATE_5);
         }
 
         /**
@@ -747,7 +715,6 @@ public class jcmathlib {
 
         void reset() {
             bnh.FLAG_FAST_MULT_VIA_RSA = false;
-            ech.FLAG_FAST_EC_MULT_VIA_KA = false;
         }
 
         public void setECC256Config() {
@@ -814,11 +781,10 @@ public class jcmathlib {
         public Bignat pBN;
         public Bignat aBN;
         public Bignat bBN;
+        public Bignat rBN;
 
         public KeyPair disposable_pair;
         public ECPrivateKey disposable_priv;
-
-
 
         /**
          * Creates new curve object from provided parameters. Either copy of provided
@@ -830,10 +796,24 @@ public class jcmathlib {
          * @param b_arr array with b
          * @param G_arr array with base point G
          * @param r_arr array with r
+         * @param k short with k
          */
         public ECCurve(boolean bCopyArgs, byte[] p_arr, byte[] a_arr, byte[] b_arr, byte[] G_arr, byte[] r_arr) {
-            //ECCurve_initialize(p_arr, a_arr, b_arr, G_arr, r_arr);
-            this.KEY_LENGTH = (short) (p_arr.length * 8);
+            short bitlength = (short) (p_arr.length * 8);
+            if (OperationSupport.getInstance().PRECISE_CURVE_BITLENGTH) {
+                for (short i = 0; i < p_arr.length; ++i) {
+                    bitlength -= 8;
+                    if (p_arr[i] != (byte) 0x00) {
+                        byte b = p_arr[i];
+                        while (b != (byte) 0x00) {
+                            b >>= (short) 1;
+                            ++bitlength;
+                        }
+                        break;
+                    }
+                }
+            }
+            this.KEY_LENGTH = bitlength;
             this.POINT_SIZE = (short) G_arr.length;
             this.COORD_SIZE = (short) ((short) (G_arr.length - 1) / 2);
 
@@ -865,6 +845,7 @@ public class jcmathlib {
             this.pBN = new Bignat(this.p, null);
             this.aBN = new Bignat(this.a, null);
             this.bBN = new Bignat(this.b, null);
+            this.rBN = new Bignat(this.r, null);
 
             this.disposable_pair = this.newKeyPair(null);
             this.disposable_priv = (ECPrivateKey) this.disposable_pair.getPrivate();
@@ -885,93 +866,35 @@ public class jcmathlib {
          * @return new or existing object with fresh key pair value
          */
         KeyPair newKeyPair(KeyPair existingKeyPair) {
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_1);
             ECPrivateKey privKey;
             ECPublicKey pubKey;
             if (existingKeyPair == null) { // Allocate if not supplied
-                existingKeyPair = new KeyPair(KeyPair.ALG_EC_FP, KEY_LENGTH);
-            }
-
-            // Some implementation will not return valid pub key until ecKeyPair.genKeyPair() is called
-            // Other implementation will fail with exception if same is called => try catch and drop any exception
-            try {
-                pubKey = (ECPublicKey) existingKeyPair.getPublic();
-                if (pubKey == null) {
-                    existingKeyPair.genKeyPair();
-                }
-            } catch (Exception e) {
-            } // intentionally do nothing
-
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_2);
-            privKey = (ECPrivateKey) existingKeyPair.getPrivate();
-            pubKey = (ECPublicKey) existingKeyPair.getPublic();
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_3);
-
-            // Set required values
-            privKey.setFieldFP(p, (short) 0, (short) p.length);
-            privKey.setA(a, (short) 0, (short) a.length);
-            privKey.setB(b, (short) 0, (short) b.length);
-            privKey.setG(G, (short) 0, (short) G.length);
-            privKey.setR(r, (short) 0, (short) r.length);
-            privKey.setK((short) 1);
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_4);
-
-            pubKey.setFieldFP(p, (short) 0, (short) p.length);
-            pubKey.setA(a, (short) 0, (short) a.length);
-            pubKey.setB(b, (short) 0, (short) b.length);
-            pubKey.setG(G, (short) 0, (short) G.length);
-            pubKey.setR(r, (short) 0, (short) r.length);
-            pubKey.setK((short) 1);
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_5);
-
-            existingKeyPair.genKeyPair();
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_6);
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_7);
-
-            return existingKeyPair;
-        }
-
-        public KeyPair newKeyPair_legacy(KeyPair existingKeyPair) {
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_1);
-            ECPrivateKey privKey;
-            ECPublicKey pubKey;
-            if (existingKeyPair == null) {
-                // We need to create required objects
-                privKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KEY_LENGTH, false);
-                PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_2);
-                pubKey = (ECPublicKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KEY_LENGTH, false);
-                PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_3);
-            }
-            else {
-                // Obtain from object
+                privKey = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KEY_LENGTH, false);
+                pubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KEY_LENGTH, false);
+                existingKeyPair = new KeyPair(pubKey, privKey);
+            } else {
                 privKey = (ECPrivateKey) existingKeyPair.getPrivate();
                 pubKey = (ECPublicKey) existingKeyPair.getPublic();
             }
+
             // Set required values
             privKey.setFieldFP(p, (short) 0, (short) p.length);
             privKey.setA(a, (short) 0, (short) a.length);
             privKey.setB(b, (short) 0, (short) b.length);
             privKey.setG(G, (short) 0, (short) G.length);
             privKey.setR(r, (short) 0, (short) r.length);
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_4);
 
             pubKey.setFieldFP(p, (short) 0, (short) p.length);
             pubKey.setA(a, (short) 0, (short) a.length);
             pubKey.setB(b, (short) 0, (short) b.length);
             pubKey.setG(G, (short) 0, (short) G.length);
             pubKey.setR(r, (short) 0, (short) r.length);
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_5);
 
-            if (existingKeyPair == null) { // Allocate if not supplied
-                existingKeyPair = new KeyPair(pubKey, privKey);
-            }
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_6);
-            existingKeyPair.genKeyPair();
-            PM.check(PM.TRAP_ECCURVE_NEWKEYPAIR_7);
+            privKey.setS(Bignat_Helper.CONST_ONE, (short) 0, (short) 1);
+            pubKey.setW(G, (short) 0, (short) G.length);
 
             return existingKeyPair;
         }
-
 
         /**
          * Converts provided Bignat into temporary EC private key object. No new
@@ -1001,7 +924,7 @@ public class jcmathlib {
 
     /**
      *
-    * @author Vasilios Mavroudis and Petr Svenda
+     * @author Vasilios Mavroudis and Petr Svenda
      */
     static class Integer {
         private Bignat_Helper bnh;
@@ -1356,311 +1279,6 @@ public class jcmathlib {
         }
     }
 
-    static class P512r1 {
-
-        public final static short KEY_LENGTH = 512; //Bits
-        public final static short POINT_SIZE = 129; //Bytes
-        public final static short COORD_SIZE = 64; //Bytes
-
-        public final static byte[] p = {(byte) 0xAA, (byte) 0xDD, (byte) 0x9D, (byte) 0xB8, (byte) 0xDB, (byte) 0xE9, (byte) 0xC4, (byte) 0x8B, (byte) 0x3F, (byte) 0xD4, (byte) 0xE6, (byte) 0xAE, (byte) 0x33, (byte) 0xC9, (byte) 0xFC, (byte) 0x07, (byte) 0xCB, (byte) 0x30, (byte) 0x8D, (byte) 0xB3, (byte) 0xB3, (byte) 0xC9, (byte) 0xD2, (byte) 0x0E, (byte) 0xD6, (byte) 0x63, (byte) 0x9C, (byte) 0xCA, (byte) 0x70, (byte) 0x33, (byte) 0x08, (byte) 0x71, (byte) 0x7D, (byte) 0x4D, (byte) 0x9B, (byte) 0x00, (byte) 0x9B, (byte) 0xC6, (byte) 0x68, (byte) 0x42, (byte) 0xAE, (byte) 0xCD, (byte) 0xA1, (byte) 0x2A, (byte) 0xE6, (byte) 0xA3, (byte) 0x80, (byte) 0xE6, (byte) 0x28, (byte) 0x81, (byte) 0xFF, (byte) 0x2F, (byte) 0x2D, (byte) 0x82, (byte) 0xC6, (byte) 0x85, (byte) 0x28, (byte) 0xAA, (byte) 0x60, (byte) 0x56, (byte) 0x58, (byte) 0x3A, (byte) 0x48, (byte) 0xF3};
-
-        public final static byte[] a = {(byte) 0x78, (byte) 0x30, (byte) 0xA3, (byte) 0x31, (byte) 0x8B, (byte) 0x60, (byte) 0x3B, (byte) 0x89, (byte) 0xE2, (byte) 0x32, (byte) 0x71, (byte) 0x45, (byte) 0xAC, (byte) 0x23, (byte) 0x4C, (byte) 0xC5, (byte) 0x94, (byte) 0xCB, (byte) 0xDD, (byte) 0x8D, (byte) 0x3D, (byte) 0xF9, (byte) 0x16, (byte) 0x10, (byte) 0xA8, (byte) 0x34, (byte) 0x41, (byte) 0xCA, (byte) 0xEA, (byte) 0x98, (byte) 0x63, (byte) 0xBC, (byte) 0x2D, (byte) 0xED, (byte) 0x5D, (byte) 0x5A, (byte) 0xA8, (byte) 0x25, (byte) 0x3A, (byte) 0xA1, (byte) 0x0A, (byte) 0x2E, (byte) 0xF1, (byte) 0xC9, (byte) 0x8B, (byte) 0x9A, (byte) 0xC8, (byte) 0xB5, (byte) 0x7F, (byte) 0x11, (byte) 0x17, (byte) 0xA7, (byte) 0x2B, (byte) 0xF2, (byte) 0xC7, (byte) 0xB9, (byte) 0xE7, (byte) 0xC1, (byte) 0xAC, (byte) 0x4D, (byte) 0x77, (byte) 0xFC, (byte) 0x94, (byte) 0xCA};
-
-        public final static byte[] b = {(byte) 0x3D, (byte) 0xF9, (byte) 0x16, (byte) 0x10, (byte) 0xA8, (byte) 0x34, (byte) 0x41, (byte) 0xCA, (byte) 0xEA, (byte) 0x98, (byte) 0x63, (byte) 0xBC, (byte) 0x2D, (byte) 0xED, (byte) 0x5D, (byte) 0x5A, (byte) 0xA8, (byte) 0x25, (byte) 0x3A, (byte) 0xA1, (byte) 0x0A, (byte) 0x2E, (byte) 0xF1, (byte) 0xC9, (byte) 0x8B, (byte) 0x9A, (byte) 0xC8, (byte) 0xB5, (byte) 0x7F, (byte) 0x11, (byte) 0x17, (byte) 0xA7, (byte) 0x2B, (byte) 0xF2, (byte) 0xC7, (byte) 0xB9, (byte) 0xE7, (byte) 0xC1, (byte) 0xAC, (byte) 0x4D, (byte) 0x77, (byte) 0xFC, (byte) 0x94, (byte) 0xCA, (byte) 0xDC, (byte) 0x08, (byte) 0x3E, (byte) 0x67, (byte) 0x98, (byte) 0x40, (byte) 0x50, (byte) 0xB7, (byte) 0x5E, (byte) 0xBA, (byte) 0xE5, (byte) 0xDD, (byte) 0x28, (byte) 0x09, (byte) 0xBD, (byte) 0x63, (byte) 0x80, (byte) 0x16, (byte) 0xF7, (byte) 0x23};
-
-        public final static byte[] G = {(byte) 0x04, (byte) 0x81, (byte) 0xAE, (byte) 0xE4, (byte) 0xBD, (byte) 0xD8, (byte) 0x2E, (byte) 0xD9, (byte) 0x64, (byte) 0x5A, (byte) 0x21, (byte) 0x32, (byte) 0x2E, (byte) 0x9C, (byte) 0x4C, (byte) 0x6A, (byte) 0x93, (byte) 0x85, (byte) 0xED, (byte) 0x9F, (byte) 0x70, (byte) 0xB5, (byte) 0xD9, (byte) 0x16, (byte) 0xC1, (byte) 0xB4, (byte) 0x3B, (byte) 0x62, (byte) 0xEE, (byte) 0xF4, (byte) 0xD0, (byte) 0x09, (byte) 0x8E, (byte) 0xFF, (byte) 0x3B, (byte) 0x1F, (byte) 0x78, (byte) 0xE2, (byte) 0xD0, (byte) 0xD4, (byte) 0x8D, (byte) 0x50, (byte) 0xD1, (byte) 0x68, (byte) 0x7B, (byte) 0x93, (byte) 0xB9, (byte) 0x7D, (byte) 0x5F, (byte) 0x7C, (byte) 0x6D, (byte) 0x50, (byte) 0x47, (byte) 0x40, (byte) 0x6A, (byte) 0x5E, (byte) 0x68, (byte) 0x8B, (byte) 0x35, (byte) 0x22, (byte) 0x09, (byte) 0xBC, (byte) 0xB9, (byte) 0xF8, (byte) 0x22,
-            (byte) 0x7D, (byte) 0xDE, (byte) 0x38, (byte) 0x5D, (byte) 0x56, (byte) 0x63, (byte) 0x32, (byte) 0xEC, (byte) 0xC0, (byte) 0xEA, (byte) 0xBF, (byte) 0xA9, (byte) 0xCF, (byte) 0x78, (byte) 0x22, (byte) 0xFD, (byte) 0xF2, (byte) 0x09, (byte) 0xF7, (byte) 0x00, (byte) 0x24, (byte) 0xA5, (byte) 0x7B, (byte) 0x1A, (byte) 0xA0, (byte) 0x00, (byte) 0xC5, (byte) 0x5B, (byte) 0x88, (byte) 0x1F, (byte) 0x81, (byte) 0x11, (byte) 0xB2, (byte) 0xDC, (byte) 0xDE, (byte) 0x49, (byte) 0x4A, (byte) 0x5F, (byte) 0x48, (byte) 0x5E, (byte) 0x5B, (byte) 0xCA, (byte) 0x4B, (byte) 0xD8, (byte) 0x8A, (byte) 0x27, (byte) 0x63, (byte) 0xAE, (byte) 0xD1, (byte) 0xCA, (byte) 0x2B, (byte) 0x2F, (byte) 0xA8, (byte) 0xF0, (byte) 0x54, (byte) 0x06, (byte) 0x78, (byte) 0xCD, (byte) 0x1E, (byte) 0x0F, (byte) 0x3A, (byte) 0xD8, (byte) 0x08, (byte) 0x92};
-
-        public final static byte[] r = {(byte) 0xAA, (byte) 0xDD, (byte) 0x9D, (byte) 0xB8, (byte) 0xDB, (byte) 0xE9, (byte) 0xC4, (byte) 0x8B, (byte) 0x3F, (byte) 0xD4, (byte) 0xE6, (byte) 0xAE, (byte) 0x33, (byte) 0xC9, (byte) 0xFC, (byte) 0x07, (byte) 0xCB, (byte) 0x30, (byte) 0x8D, (byte) 0xB3, (byte) 0xB3, (byte) 0xC9, (byte) 0xD2, (byte) 0x0E, (byte) 0xD6, (byte) 0x63, (byte) 0x9C, (byte) 0xCA, (byte) 0x70, (byte) 0x33, (byte) 0x08, (byte) 0x70, (byte) 0x55, (byte) 0x3E, (byte) 0x5C, (byte) 0x41, (byte) 0x4C, (byte) 0xA9, (byte) 0x26, (byte) 0x19, (byte) 0x41, (byte) 0x86, (byte) 0x61, (byte) 0x19, (byte) 0x7F, (byte) 0xAC, (byte) 0x10, (byte) 0x47, (byte) 0x1D, (byte) 0xB1, (byte) 0xD3, (byte) 0x81, (byte) 0x08, (byte) 0x5D, (byte) 0xDA, (byte) 0xDD, (byte) 0xB5, (byte) 0x87, (byte) 0x96, (byte) 0x82, (byte) 0x9C, (byte) 0xA9, (byte) 0x00, (byte) 0x69};
-    }
-
-
-    /**
-     * Utility class for performance profiling. Contains definition of performance trap
-     * constants and trap reaction method.
-    * @author Petr Svenda
-     */
-    static class PM {
-        public static short m_perfStop = -1; // Performace measurement stop indicator
-
-        // Performance-related debugging response codes
-        public static final short PERF_START        = (short) 0x0001;
-
-        public static final short TRAP_UNDEFINED = (short) 0xffff;
-
-        public static final short TRAP_EC_MUL = (short) 0x7780;
-        public static final short TRAP_EC_MUL_1 = (short) (TRAP_EC_MUL + 1);
-        public static final short TRAP_EC_MUL_2 = (short) (TRAP_EC_MUL + 2);
-        public static final short TRAP_EC_MUL_3 = (short) (TRAP_EC_MUL + 3);
-        public static final short TRAP_EC_MUL_4 = (short) (TRAP_EC_MUL + 4);
-        public static final short TRAP_EC_MUL_5 = (short) (TRAP_EC_MUL + 5);
-        public static final short TRAP_EC_MUL_6 = (short) (TRAP_EC_MUL + 6);
-        public static final short TRAP_EC_MUL_COMPLETE = TRAP_EC_MUL;
-
-        public static final short TRAP_EC_GEN = (short) 0x7770;
-        public static final short TRAP_EC_GEN_1 = (short) (TRAP_EC_GEN + 1);
-        public static final short TRAP_EC_GEN_2 = (short) (TRAP_EC_GEN + 2);
-        public static final short TRAP_EC_GEN_3 = (short) (TRAP_EC_GEN + 3);
-        public static final short TRAP_EC_GEN_COMPLETE = TRAP_EC_GEN;
-
-        public static final short TRAP_EC_DBL = (short) 0x7760;
-        public static final short TRAP_EC_DBL_1 = (short) (TRAP_EC_DBL + 1);
-        public static final short TRAP_EC_DBL_2 = (short) (TRAP_EC_DBL + 2);
-        public static final short TRAP_EC_DBL_3 = (short) (TRAP_EC_DBL + 3);
-        public static final short TRAP_EC_DBL_4 = (short) (TRAP_EC_DBL + 4);
-        public static final short TRAP_EC_DBL_COMPLETE = TRAP_EC_DBL;
-
-        public static final short TRAP_EC_ADD = (short) 0x7750;
-        public static final short TRAP_EC_ADD_1 = (short) (TRAP_EC_ADD + 1);
-        public static final short TRAP_EC_ADD_2 = (short) (TRAP_EC_ADD + 2);
-        public static final short TRAP_EC_ADD_3 = (short) (TRAP_EC_ADD + 3);
-        public static final short TRAP_EC_ADD_4 = (short) (TRAP_EC_ADD + 4);
-        public static final short TRAP_EC_ADD_5 = (short) (TRAP_EC_ADD + 5);
-        public static final short TRAP_EC_ADD_COMPLETE = TRAP_EC_ADD;
-
-        public static final short TRAP_BN_STR = (short) 0x7740;
-        public static final short TRAP_BN_STR_1 = (short) (TRAP_BN_STR + 1);
-        public static final short TRAP_BN_STR_2 = (short) (TRAP_BN_STR + 2);
-        public static final short TRAP_BN_STR_3 = (short) (TRAP_BN_STR + 3);
-        public static final short TRAP_BN_STR_COMPLETE = TRAP_BN_STR;
-
-        public static final short TRAP_BN_ADD = (short) 0x7730;
-        public static final short TRAP_BN_ADD_1 = (short) (TRAP_BN_ADD + 1);
-        public static final short TRAP_BN_ADD_2 = (short) (TRAP_BN_ADD + 2);
-        public static final short TRAP_BN_ADD_3 = (short) (TRAP_BN_ADD + 3);
-        public static final short TRAP_BN_ADD_4 = (short) (TRAP_BN_ADD + 4);
-        public static final short TRAP_BN_ADD_5 = (short) (TRAP_BN_ADD + 5);
-        public static final short TRAP_BN_ADD_6 = (short) (TRAP_BN_ADD + 6);
-        public static final short TRAP_BN_ADD_7 = (short) (TRAP_BN_ADD + 7);
-        public static final short TRAP_BN_ADD_COMPLETE = TRAP_BN_ADD;
-
-        public static final short TRAP_BN_SUB = (short) 0x7720;
-        public static final short TRAP_BN_SUB_1 = (short) (TRAP_BN_SUB + 1);
-        public static final short TRAP_BN_SUB_2 = (short) (TRAP_BN_SUB + 2);
-        public static final short TRAP_BN_SUB_3 = (short) (TRAP_BN_SUB + 3);
-        public static final short TRAP_BN_SUB_4 = (short) (TRAP_BN_SUB + 4);
-        public static final short TRAP_BN_SUB_5 = (short) (TRAP_BN_SUB + 5);
-        public static final short TRAP_BN_SUB_6 = (short) (TRAP_BN_SUB + 6);
-        public static final short TRAP_BN_SUB_7 = (short) (TRAP_BN_SUB + 7);
-        public static final short TRAP_BN_SUB_COMPLETE = TRAP_BN_SUB;
-
-        public static final short TRAP_BN_MUL = (short) 0x7710;
-        public static final short TRAP_BN_MUL_1 = (short) (TRAP_BN_MUL + 1);
-        public static final short TRAP_BN_MUL_2 = (short) (TRAP_BN_MUL + 2);
-        public static final short TRAP_BN_MUL_3 = (short) (TRAP_BN_MUL + 3);
-        public static final short TRAP_BN_MUL_4 = (short) (TRAP_BN_MUL + 4);
-        public static final short TRAP_BN_MUL_5 = (short) (TRAP_BN_MUL + 5);
-        public static final short TRAP_BN_MUL_6 = (short) (TRAP_BN_MUL + 6);
-        public static final short TRAP_BN_MUL_COMPLETE = TRAP_BN_MUL;
-
-        public static final short TRAP_BN_EXP = (short) 0x7700;
-        public static final short TRAP_BN_EXP_1 = (short) (TRAP_BN_EXP + 1);
-        public static final short TRAP_BN_EXP_2 = (short) (TRAP_BN_EXP + 2);
-        public static final short TRAP_BN_EXP_3 = (short) (TRAP_BN_EXP + 3);
-        public static final short TRAP_BN_EXP_4 = (short) (TRAP_BN_EXP + 4);
-        public static final short TRAP_BN_EXP_5 = (short) (TRAP_BN_EXP + 5);
-        public static final short TRAP_BN_EXP_6 = (short) (TRAP_BN_EXP + 6);
-        public static final short TRAP_BN_EXP_COMPLETE = TRAP_BN_EXP;
-
-        public static final short TRAP_BN_MOD = (short) 0x76f0;
-        public static final short TRAP_BN_MOD_1 = (short) (TRAP_BN_MOD + 1);
-        public static final short TRAP_BN_MOD_2 = (short) (TRAP_BN_MOD + 2);
-        public static final short TRAP_BN_MOD_3 = (short) (TRAP_BN_MOD + 3);
-        public static final short TRAP_BN_MOD_4 = (short) (TRAP_BN_MOD + 4);
-        public static final short TRAP_BN_MOD_5 = (short) (TRAP_BN_MOD + 5);
-        public static final short TRAP_BN_MOD_COMPLETE = TRAP_BN_MOD;
-
-        public static final short TRAP_BN_ADD_MOD = (short) 0x76e0;
-        public static final short TRAP_BN_ADD_MOD_1 = (short) (TRAP_BN_ADD_MOD + 1);
-        public static final short TRAP_BN_ADD_MOD_2 = (short) (TRAP_BN_ADD_MOD + 2);
-        public static final short TRAP_BN_ADD_MOD_3 = (short) (TRAP_BN_ADD_MOD + 3);
-        public static final short TRAP_BN_ADD_MOD_4 = (short) (TRAP_BN_ADD_MOD + 4);
-        public static final short TRAP_BN_ADD_MOD_5 = (short) (TRAP_BN_ADD_MOD + 5);
-        public static final short TRAP_BN_ADD_MOD_6 = (short) (TRAP_BN_ADD_MOD + 6);
-        public static final short TRAP_BN_ADD_MOD_7 = (short) (TRAP_BN_ADD_MOD + 7);
-        public static final short TRAP_BN_ADD_MOD_COMPLETE = TRAP_BN_ADD_MOD;
-
-        public static final short TRAP_BN_SUB_MOD = (short) 0x76d0;
-        public static final short TRAP_BN_SUB_MOD_1 = (short) (TRAP_BN_SUB_MOD + 1);
-        public static final short TRAP_BN_SUB_MOD_2 = (short) (TRAP_BN_SUB_MOD + 2);
-        public static final short TRAP_BN_SUB_MOD_3 = (short) (TRAP_BN_SUB_MOD + 3);
-        public static final short TRAP_BN_SUB_MOD_4 = (short) (TRAP_BN_SUB_MOD + 4);
-        public static final short TRAP_BN_SUB_MOD_5 = (short) (TRAP_BN_SUB_MOD + 5);
-        public static final short TRAP_BN_SUB_MOD_6 = (short) (TRAP_BN_SUB_MOD + 6);
-        public static final short TRAP_BN_SUB_MOD_COMPLETE = TRAP_BN_SUB_MOD;
-
-        public static final short TRAP_BN_MUL_MOD = (short) 0x76c0;
-        public static final short TRAP_BN_MUL_MOD_1 = (short) (TRAP_BN_MUL_MOD + 1);
-        public static final short TRAP_BN_MUL_MOD_2 = (short) (TRAP_BN_MUL_MOD + 2);
-        public static final short TRAP_BN_MUL_MOD_3 = (short) (TRAP_BN_MUL_MOD + 3);
-        public static final short TRAP_BN_MUL_MOD_4 = (short) (TRAP_BN_MUL_MOD + 4);
-        public static final short TRAP_BN_MUL_MOD_5 = (short) (TRAP_BN_MUL_MOD + 5);
-        public static final short TRAP_BN_MUL_MOD_6 = (short) (TRAP_BN_MUL_MOD + 6);
-        public static final short TRAP_BN_MUL_MOD_COMPLETE = TRAP_BN_MUL_MOD;
-
-        public static final short TRAP_BN_EXP_MOD = (short) 0x76b0;
-        public static final short TRAP_BN_EXP_MOD_1 = (short) (TRAP_BN_EXP_MOD + 1);
-        public static final short TRAP_BN_EXP_MOD_2 = (short) (TRAP_BN_EXP_MOD + 2);
-        public static final short TRAP_BN_EXP_MOD_3 = (short) (TRAP_BN_EXP_MOD + 3);
-        public static final short TRAP_BN_EXP_MOD_4 = (short) (TRAP_BN_EXP_MOD + 4);
-        public static final short TRAP_BN_EXP_MOD_5 = (short) (TRAP_BN_EXP_MOD + 5);
-        public static final short TRAP_BN_EXP_MOD_6 = (short) (TRAP_BN_EXP_MOD + 6);
-        public static final short TRAP_BN_EXP_MOD_COMPLETE = TRAP_BN_EXP_MOD;
-
-        public static final short TRAP_BN_INV_MOD = (short) 0x76a0;
-        public static final short TRAP_BN_INV_MOD_1 = (short) (TRAP_BN_INV_MOD + 1);
-        public static final short TRAP_BN_INV_MOD_2 = (short) (TRAP_BN_INV_MOD + 2);
-        public static final short TRAP_BN_INV_MOD_3 = (short) (TRAP_BN_INV_MOD + 3);
-        public static final short TRAP_BN_INV_MOD_4 = (short) (TRAP_BN_INV_MOD + 4);
-        public static final short TRAP_BN_INV_MOD_5 = (short) (TRAP_BN_INV_MOD + 5);
-        public static final short TRAP_BN_INV_MOD_COMPLETE = TRAP_BN_INV_MOD;
-
-        public static final short TRAP_INT_STR = (short) 0x7690;
-        public static final short TRAP_INT_STR_1 = (short) (TRAP_INT_STR + 1);
-        public static final short TRAP_INT_STR_2 = (short) (TRAP_INT_STR + 2);
-        public static final short TRAP_INT_STR_COMPLETE = TRAP_INT_STR;
-
-        public static final short TRAP_INT_ADD = (short) 0x7680;
-        public static final short TRAP_INT_ADD_1 = (short) (TRAP_INT_ADD + 1);
-        public static final short TRAP_INT_ADD_2 = (short) (TRAP_INT_ADD + 2);
-        public static final short TRAP_INT_ADD_3 = (short) (TRAP_INT_ADD + 3);
-        public static final short TRAP_INT_ADD_4 = (short) (TRAP_INT_ADD + 4);
-        public static final short TRAP_INT_ADD_COMPLETE = TRAP_INT_ADD;
-
-        public static final short TRAP_INT_SUB = (short) 0x7670;
-        public static final short TRAP_INT_SUB_1 = (short) (TRAP_INT_SUB + 1);
-        public static final short TRAP_INT_SUB_2 = (short) (TRAP_INT_SUB + 2);
-        public static final short TRAP_INT_SUB_3 = (short) (TRAP_INT_SUB + 3);
-        public static final short TRAP_INT_SUB_4 = (short) (TRAP_INT_SUB + 4);
-        public static final short TRAP_INT_SUB_COMPLETE = TRAP_INT_SUB;
-
-        public static final short TRAP_INT_MUL = (short) 0x7660;
-        public static final short TRAP_INT_MUL_1 = (short) (TRAP_INT_MUL + 1);
-        public static final short TRAP_INT_MUL_2 = (short) (TRAP_INT_MUL + 2);
-        public static final short TRAP_INT_MUL_3 = (short) (TRAP_INT_MUL + 3);
-        public static final short TRAP_INT_MUL_4 = (short) (TRAP_INT_MUL + 4);
-        public static final short TRAP_INT_MUL_COMPLETE = TRAP_INT_MUL;
-
-        public static final short TRAP_INT_DIV = (short) 0x7650;
-        public static final short TRAP_INT_DIV_1 = (short) (TRAP_INT_DIV + 1);
-        public static final short TRAP_INT_DIV_2 = (short) (TRAP_INT_DIV + 2);
-        public static final short TRAP_INT_DIV_3 = (short) (TRAP_INT_DIV + 3);
-        public static final short TRAP_INT_DIV_4 = (short) (TRAP_INT_DIV + 4);
-        public static final short TRAP_INT_DIV_COMPLETE = TRAP_INT_DIV;
-
-        public static final short TRAP_INT_EXP = (short) 0x7640;
-        public static final short TRAP_INT_EXP_1 = (short) (TRAP_INT_EXP + 1);
-        public static final short TRAP_INT_EXP_2 = (short) (TRAP_INT_EXP + 2);
-        public static final short TRAP_INT_EXP_3 = (short) (TRAP_INT_EXP + 3);
-        public static final short TRAP_INT_EXP_4 = (short) (TRAP_INT_EXP + 4);
-        public static final short TRAP_INT_EXP_COMPLETE = TRAP_INT_EXP;
-
-        public static final short TRAP_INT_MOD = (short) 0x7630;
-        public static final short TRAP_INT_MOD_1 = (short) (TRAP_INT_MOD + 1);
-        public static final short TRAP_INT_MOD_2 = (short) (TRAP_INT_MOD + 2);
-        public static final short TRAP_INT_MOD_3 = (short) (TRAP_INT_MOD + 3);
-        public static final short TRAP_INT_MOD_4 = (short) (TRAP_INT_MOD + 4);
-        public static final short TRAP_INT_MOD_COMPLETE = TRAP_INT_MOD;
-
-        public static final short TRAP_BN_POW2_MOD = (short) 0x7620;
-        public static final short TRAP_BN_POW2_MOD_1 = (short) (TRAP_BN_POW2_MOD + 1);
-        public static final short TRAP_BN_POW2_MOD_2 = (short) (TRAP_BN_POW2_MOD + 2);
-        public static final short TRAP_BN_POW2_MOD_3 = (short) (TRAP_BN_POW2_MOD + 3);
-        public static final short TRAP_BN_POW2_COMPLETE = TRAP_BN_POW2_MOD;
-
-
-        // 7610-7600 unused
-
-        public static final short TRAP_ECCURVE_NEWKEYPAIR = (short) 0x75f0;
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_1 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 1);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_2 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 2);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_3 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 3);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_4 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 4);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_5 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 5);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_6 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 6);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_7 = (short) (TRAP_ECCURVE_NEWKEYPAIR + 7);
-        public static final short TRAP_ECCURVE_NEWKEYPAIR_COMPLETE = TRAP_ECCURVE_NEWKEYPAIR;
-
-        public static final short TRAP_ECPOINT_ADD = (short) 0x75e0;
-        public static final short TRAP_ECPOINT_ADD_1 = (short) (TRAP_ECPOINT_ADD + 1);
-        public static final short TRAP_ECPOINT_ADD_2 = (short) (TRAP_ECPOINT_ADD + 2);
-        public static final short TRAP_ECPOINT_ADD_3 = (short) (TRAP_ECPOINT_ADD + 3);
-        public static final short TRAP_ECPOINT_ADD_4 = (short) (TRAP_ECPOINT_ADD + 4);
-        public static final short TRAP_ECPOINT_ADD_5 = (short) (TRAP_ECPOINT_ADD + 5);
-        public static final short TRAP_ECPOINT_ADD_6 = (short) (TRAP_ECPOINT_ADD + 6);
-        public static final short TRAP_ECPOINT_ADD_7 = (short) (TRAP_ECPOINT_ADD + 7);
-        public static final short TRAP_ECPOINT_ADD_8 = (short) (TRAP_ECPOINT_ADD + 8);
-        public static final short TRAP_ECPOINT_ADD_9 = (short) (TRAP_ECPOINT_ADD + 9);
-        public static final short TRAP_ECPOINT_ADD_10 = (short) (TRAP_ECPOINT_ADD + 10);
-        public static final short TRAP_ECPOINT_ADD_11 = (short) (TRAP_ECPOINT_ADD + 11);
-        public static final short TRAP_ECPOINT_ADD_12 = (short) (TRAP_ECPOINT_ADD + 12);
-        public static final short TRAP_ECPOINT_ADD_13 = (short) (TRAP_ECPOINT_ADD + 13);
-        public static final short TRAP_ECPOINT_ADD_COMPLETE = TRAP_ECPOINT_ADD;
-
-        public static final short TRAP_ECPOINT_MULT = (short) 0x75d0;
-        public static final short TRAP_ECPOINT_MULT_1 = (short) (TRAP_ECPOINT_MULT + 1);
-        public static final short TRAP_ECPOINT_MULT_2 = (short) (TRAP_ECPOINT_MULT + 2);
-        public static final short TRAP_ECPOINT_MULT_3 = (short) (TRAP_ECPOINT_MULT + 3);
-        public static final short TRAP_ECPOINT_MULT_4 = (short) (TRAP_ECPOINT_MULT + 4);
-        public static final short TRAP_ECPOINT_MULT_5 = (short) (TRAP_ECPOINT_MULT + 5);
-        public static final short TRAP_ECPOINT_MULT_6 = (short) (TRAP_ECPOINT_MULT + 6);
-        public static final short TRAP_ECPOINT_MULT_7 = (short) (TRAP_ECPOINT_MULT + 7);
-        public static final short TRAP_ECPOINT_MULT_8 = (short) (TRAP_ECPOINT_MULT + 8);
-        public static final short TRAP_ECPOINT_MULT_9 = (short) (TRAP_ECPOINT_MULT + 9);
-        public static final short TRAP_ECPOINT_MULT_10 = (short) (TRAP_ECPOINT_MULT + 10);
-        public static final short TRAP_ECPOINT_MULT_11 = (short) (TRAP_ECPOINT_MULT + 11);
-        public static final short TRAP_ECPOINT_MULT_12 = (short) (TRAP_ECPOINT_MULT + 12);
-        public static final short TRAP_ECPOINT_MULT_COMPLETE = TRAP_ECPOINT_MULT;
-
-        public static final short TRAP_ECPOINT_MULT_X = (short) 0x75c0;
-        public static final short TRAP_ECPOINT_MULT_X_1 = (short) (TRAP_ECPOINT_MULT_X + 1);
-        public static final short TRAP_ECPOINT_MULT_X_2 = (short) (TRAP_ECPOINT_MULT_X + 2);
-        public static final short TRAP_ECPOINT_MULT_X_3 = (short) (TRAP_ECPOINT_MULT_X + 3);
-        public static final short TRAP_ECPOINT_MULT_X_4 = (short) (TRAP_ECPOINT_MULT_X + 4);
-        public static final short TRAP_ECPOINT_MULT_X_5 = (short) (TRAP_ECPOINT_MULT_X + 5);
-        public static final short TRAP_ECPOINT_MULT_X_COMPLETE = TRAP_ECPOINT_MULT_X;
-
-        public static final short TRAP_ECPOINT_NEGATE = (short) 0x75b0;
-        public static final short TRAP_ECPOINT_NEGATE_1 = (short) (TRAP_ECPOINT_NEGATE + 1);
-        public static final short TRAP_ECPOINT_NEGATE_2 = (short) (TRAP_ECPOINT_NEGATE + 2);
-        public static final short TRAP_ECPOINT_NEGATE_3 = (short) (TRAP_ECPOINT_NEGATE + 3);
-        public static final short TRAP_ECPOINT_NEGATE_4 = (short) (TRAP_ECPOINT_NEGATE + 4);
-        public static final short TRAP_ECPOINT_NEGATE_5 = (short) (TRAP_ECPOINT_NEGATE + 5);
-        public static final short TRAP_ECPOINT_NEGATE_COMPLETE = TRAP_ECPOINT_NEGATE;
-
-        public static final short TRAP_BIGNAT_SQRT = (short) 0x75a0;
-        public static final short TRAP_BIGNAT_SQRT_1 = (short) (TRAP_BIGNAT_SQRT + 1);
-        public static final short TRAP_BIGNAT_SQRT_2 = (short) (TRAP_BIGNAT_SQRT + 2);
-        public static final short TRAP_BIGNAT_SQRT_3 = (short) (TRAP_BIGNAT_SQRT + 3);
-        public static final short TRAP_BIGNAT_SQRT_4 = (short) (TRAP_BIGNAT_SQRT + 4);
-        public static final short TRAP_BIGNAT_SQRT_5 = (short) (TRAP_BIGNAT_SQRT + 5);
-        public static final short TRAP_BIGNAT_SQRT_6 = (short) (TRAP_BIGNAT_SQRT + 6);
-        public static final short TRAP_BIGNAT_SQRT_7 = (short) (TRAP_BIGNAT_SQRT + 7);
-        public static final short TRAP_BIGNAT_SQRT_8 = (short) (TRAP_BIGNAT_SQRT + 8);
-        public static final short TRAP_BIGNAT_SQRT_9 = (short) (TRAP_BIGNAT_SQRT + 9);
-        public static final short TRAP_BIGNAT_SQRT_10 = (short) (TRAP_BIGNAT_SQRT + 10);
-        public static final short TRAP_BIGNAT_SQRT_11 = (short) (TRAP_BIGNAT_SQRT + 11);
-        public static final short TRAP_BIGNAT_SQRT_12 = (short) (TRAP_BIGNAT_SQRT + 12);
-        public static final short TRAP_BIGNAT_SQRT_13 = (short) (TRAP_BIGNAT_SQRT + 13);
-        public static final short TRAP_BIGNAT_SQRT_14 = (short) (TRAP_BIGNAT_SQRT + 14);
-        public static final short TRAP_BIGNAT_SQRT_15 = (short) (TRAP_BIGNAT_SQRT + 15);
-        public static final short TRAP_BIGNAT_SQRT_COMPLETE = TRAP_BIGNAT_SQRT;
-
-
-        public static final short TRAP_EC_SETCURVE = (short) 0x7590;
-        public static final short TRAP_EC_SETCURVE_1 = (short) (TRAP_EC_SETCURVE + 1);
-        public static final short TRAP_EC_SETCURVE_2 = (short) (TRAP_EC_SETCURVE + 2);
-        public static final short TRAP_EC_SETCURVE_COMPLETE = TRAP_EC_SETCURVE;
-
-
-        public static void check(short stopCondition) {
-            if (PM.m_perfStop == stopCondition) {
-                ISOException.throwIt(stopCondition);
-            }
-        }
-    }
-
-
     /**
      *
      * @author Petr Svenda
@@ -1683,6 +1301,7 @@ public class jcmathlib {
         byte[] helper_BN_array1 = null;
         byte[] helper_BN_array2 = null;
         byte[] helper_uncompressed_point_arr1 = null;
+        byte[] helper_uncompressed_point_arr2 = null;
         byte[] helper_hashArray = null;
         /**
          * Number of pre-allocated helper arrays
@@ -1700,6 +1319,7 @@ public class jcmathlib {
         Bignat helper_BN_D;
         Bignat helper_BN_E;
         Bignat helper_BN_F;
+        Bignat helper_BN_G;
 
         // These Bignats helperEC_BN_? are allocated
         Bignat helperEC_BN_A;
@@ -1726,6 +1346,8 @@ public class jcmathlib {
             locker.registerLock(helper_BN_array2);
             helper_uncompressed_point_arr1 = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.ECPH_uncompressed_point_arr1));
             locker.registerLock(helper_uncompressed_point_arr1);
+            helper_uncompressed_point_arr2 = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.ECPH_uncompressed_point_arr2));
+            locker.registerLock(helper_uncompressed_point_arr2);
             hashEngine = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
             helper_hashArray = memAlloc.allocateByteArray(hashEngine.getLength(), memAlloc.getAllocatorType(ObjectAllocator.ECPH_hashArray));
             locker.registerLock(helper_hashArray);
@@ -1738,6 +1360,7 @@ public class jcmathlib {
             helper_BN_D = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_D), bnh);
             helper_BN_E = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_E), bnh);
             helper_BN_F = new Bignat((short) (MAX_BIGNAT_SIZE + 2), memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_F), bnh); // +2 is to correct for infrequent RSA result with two or more leading zeroes
+            helper_BN_G = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_G), bnh);
 
             helperEC_BN_A = new Bignat(MAX_POINT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_A), bnh);
             helperEC_BN_B = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_B), bnh);
@@ -1771,6 +1394,7 @@ public class jcmathlib {
             Util.arrayFillNonAtomic(helper_BN_array1, (short) 0, (short) helper_BN_array1.length, (byte) 0);
             Util.arrayFillNonAtomic(helper_BN_array2, (short) 0, (short) helper_BN_array2.length, (byte) 0);
             Util.arrayFillNonAtomic(helper_uncompressed_point_arr1, (short) 0, (short) helper_uncompressed_point_arr1.length, (byte) 0);
+            Util.arrayFillNonAtomic(helper_uncompressed_point_arr2, (short) 0, (short) helper_uncompressed_point_arr2.length, (byte) 0);
         }
 
         /**
@@ -1817,6 +1441,9 @@ public class jcmathlib {
             if (locker.isLocked(helper_uncompressed_point_arr1)) {
                 locker.unlock(helper_uncompressed_point_arr1);
             }
+            if (locker.isLocked(helper_uncompressed_point_arr2)) {
+                locker.unlock(helper_uncompressed_point_arr2);
+            }
             if (locker.isLocked(helper_hashArray)) {
                 locker.unlock(helper_hashArray);
             }
@@ -1826,14 +1453,20 @@ public class jcmathlib {
 
     public static class SecP256r1 {
 
-        public final static short KEY_LENGTH = 256;//Bits
-        public final static short POINT_SIZE = 65; //Bytes
-        public final static short COORD_SIZE = 32; //Bytes
+        public final static short KEY_LENGTH = 256;
+        public final static short POINT_SIZE = 65;
+        public final static short COORD_SIZE = 32;
 
-        public final static byte[] p = { (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, 0x00, 0x00,
-                0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff };
+        public final static byte[] p = {
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x01,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff
+        };
 
 
         public final static byte[] a = { (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, 0x00, 0x00,
@@ -1859,9 +1492,6 @@ public class jcmathlib {
                 (byte) 0xff, (byte) 0xbc, (byte) 0xe6, (byte) 0xfa, (byte) 0xad, (byte) 0xa7, 0x17, (byte) 0x9e,
                 (byte) 0x84, (byte) 0xf3, (byte) 0xb9, (byte) 0xca, (byte) 0xc2, (byte) 0xfc, 0x63, 0x25, 0x51 };
     }
-    /**
-     * Credits: Based on Bignat library from OV-chip project https://ovchip.cs.ru.nl/OV-chip_2.0 by Radboud University Nijmegen
-     */
 
 
     /**
@@ -1889,81 +1519,81 @@ public class jcmathlib {
         boolean ERASE_ON_UNLOCK = false;
 
         /**
-        * Factor for converting digit size into short length. 1 for the short/short
-        * converting, 4 for the int/long configuration.
-        *
-        */
+         * Factor for converting digit size into short length. 1 for the short/short
+         * converting, 4 for the int/long configuration.
+         *
+         */
         public static final short size_multiplier = 1;
 
         /**
-        * Bitmask for extracting a digit out of a longer int/short value. short
-        * 0xff for the short/short configuration, long 0xffffffffL the int/long
-        * configuration.
-        */
+         * Bitmask for extracting a digit out of a longer int/short value. short
+         * 0xff for the short/short configuration, long 0xffffffffL the int/long
+         * configuration.
+         */
         public static final short digit_mask = 0xff;
 
         /**
-        * Bitmask for the highest bit in a digit. short 0x80 for the short/short
-        * configuration, long 0x80000000 for the int/long configuration.
-        *
-        */
+         * Bitmask for the highest bit in a digit. short 0x80 for the short/short
+         * configuration, long 0x80000000 for the int/long configuration.
+         *
+         */
         public static final short digit_first_bit_mask = 0x80;
 
         /**
-        * Bitmask for the second highest bit in a digit. short 0x40 for the
-        * short/short configuration, long 0x40000000 for the int/long
-        * configuration.
-        *
-        */
+         * Bitmask for the second highest bit in a digit. short 0x40 for the
+         * short/short configuration, long 0x40000000 for the int/long
+         * configuration.
+         *
+         */
         public static final short digit_second_bit_mask = 0x40;
 
         /**
-        * Bitmask for the two highest bits in a digit. short 0xC0 for the
-        * short/short configuration, long 0xC0000000 for the int/long
-        * configuration.
-        *
-        */
+         * Bitmask for the two highest bits in a digit. short 0xC0 for the
+         * short/short configuration, long 0xC0000000 for the int/long
+         * configuration.
+         *
+         */
         public static final short digit_first_two_bit_mask = 0xC0;
 
         /**
-        * Size in bits of one digit. 8 for the short/short configuration, 32 for
-        * the int/long configuration.
-        */
+         * Size in bits of one digit. 8 for the short/short configuration, 32 for
+         * the int/long configuration.
+         */
         public static final short digit_len = 8;
 
         /**
-        * Size in bits of a double digit. 16 for the short/short configuration, 64
-        * for the int/long configuration.
-        */
+         * Size in bits of a double digit. 16 for the short/short configuration, 64
+         * for the int/long configuration.
+         */
         private static final short double_digit_len = 16;
 
         /**
-        * Bitmask for erasing the sign bit in a double digit. short 0x7fff for the
-        * short/short configuration, long 0x7fffffffffffffffL for the int/long
-        * configuration.
-        */
+         * Bitmask for erasing the sign bit in a double digit. short 0x7fff for the
+         * short/short configuration, long 0x7fffffffffffffffL for the int/long
+         * configuration.
+         */
         private static final short positive_double_digit_mask = 0x7fff;
 
         /**
-        * Bitmask for the highest bit in a double digit.
-        */
+         * Bitmask for the highest bit in a double digit.
+         */
         public static final short highest_digit_bit = (short) (1L << (digit_len - 1));
 
         /**
-        * The base as a double digit. The base is first value that does not fit
-        * into a single digit. 2^8 for the short/short configuration and 2^32 for
-        * the int/long configuration.
-        */
+         * The base as a double digit. The base is first value that does not fit
+         * into a single digit. 2^8 for the short/short configuration and 2^32 for
+         * the int/long configuration.
+         */
         public static final short bignat_base = (short) (1L << digit_len);
 
         /**
-        * Bitmask with just the highest bit in a double digit.
-        */
+         * Bitmask with just the highest bit in a double digit.
+         */
         public static final short highest_double_digit_bit = (short) (1L << (double_digit_len - 1));
 
         /**
-        * Digit array. Elements have type byte.
-        */
+         * Digit array. Elements have type byte.
+         */
 
         /**
          * Internal storage array for this Bignat. The current version uses byte array with
@@ -2022,7 +1652,7 @@ public class jcmathlib {
             }
             else {
                 // this Bignat is already locked, raise exception (incorrect sequence of locking and unlocking)
-               ISOException.throwIt(ReturnCodes.SW_LOCK_ALREADYLOCKED);
+                ISOException.throwIt(ReturnCodes.SW_LOCK_ALREADYLOCKED);
             }
         }
         /**
@@ -2053,16 +1683,16 @@ public class jcmathlib {
         }
 
         /**
-        * Return this Bignat as byte array. For the short/short configuration
-        * simply the digit array is returned. For other configurations a new short
-        * array is allocated and returned. Modifying the returned short array
-        * therefore might or might not change this bignat.
-        * IMPORTANT: this function returns directly the underlying storage array.
-        * Current value of this Bignat can be stored in smaller number of bytes.
-        * Use {@code getLength()} method to obtain actual size.
-        *
-        * @return this bignat as byte array
-        */
+         * Return this Bignat as byte array. For the short/short configuration
+         * simply the digit array is returned. For other configurations a new short
+         * array is allocated and returned. Modifying the returned short array
+         * therefore might or might not change this bignat.
+         * IMPORTANT: this function returns directly the underlying storage array.
+         * Current value of this Bignat can be stored in smaller number of bytes.
+         * Use {@code getLength()} method to obtain actual size.
+         *
+         * @return this bignat as byte array
+         */
         public byte[] as_byte_array() {
             return value;
         }
@@ -2080,13 +1710,13 @@ public class jcmathlib {
 
 
         /**
-        * Return the size in digits. Provides access to the internal {@link #size}
-        * field.
-        * <P>
-        * The return value is adjusted by {@link #set_size}.
-        *
-        * @return size in digits.
-        */
+         * Return the size in digits. Provides access to the internal {@link #size}
+         * field.
+         * <P>
+         * The return value is adjusted by {@link #set_size}.
+         *
+         * @return size in digits.
+         */
         public short length() {
             return size;
         }
@@ -2218,8 +1848,8 @@ public class jcmathlib {
 
 
         /**
-        * Stores zero in this object for currently used subpart given by internal size.
-        */
+         * Stores zero in this object for currently used subpart given by internal size.
+         */
         public void zero() {
             Util.arrayFillNonAtomic(value, (short) 0, this.size, (byte) 0);
         }
@@ -2239,17 +1869,17 @@ public class jcmathlib {
 
 
         /**
-        * Stores one in this object. Keeps previous size of this Bignat
-        * (1 is prepended with required number of zeroes).
-        */
+         * Stores one in this object. Keeps previous size of this Bignat
+         * (1 is prepended with required number of zeroes).
+         */
         public void one() {
             this.zero();
             value[(short) (size - 1)] = 1;
         }
         /**
-        * Stores two in this object. Keeps previous size of this Bignat (2 is
-        * prepended with required number of zeroes).
-        */
+         * Stores two in this object. Keeps previous size of this Bignat (2 is
+         * prepended with required number of zeroes).
+         */
         public void two() {
             this.zero();
             value[(short) (size - 1)] = 0x02;
@@ -2299,15 +1929,15 @@ public class jcmathlib {
 
 
         /**
-        * Copies {@code other} into this. No size requirements. If {@code other}
-        * has more digits then the superfluous leading digits of {@code other} are
-        * asserted to be zero. If this bignat has more digits than its leading
-        * digits are correctly initilized to zero. This function will not change size
-        * attribute of this object.
-        *
-        * @param other
-        *            Bignat to copy into this object.
-        */
+         * Copies {@code other} into this. No size requirements. If {@code other}
+         * has more digits then the superfluous leading digits of {@code other} are
+         * asserted to be zero. If this bignat has more digits than its leading
+         * digits are correctly initilized to zero. This function will not change size
+         * attribute of this object.
+         *
+         * @param other
+         *            Bignat to copy into this object.
+         */
         public void copy(Bignat other) {
             short this_start, other_start, len;
             if (this.size >= other.size) {
@@ -2406,18 +2036,18 @@ public class jcmathlib {
 
 
         /**
-        * Addition of big integers x and y stored in byte arrays with specified offset and length.
-        * The result is stored into x array argument.
-        * @param x          array with first bignat
-        * @param xOffset    start offset in array of {@code x}
-        * @param xLength    length of {@code x}
-        * @param y          array with second bignat
-        * @param yOffset    start offset in array of {@code y}
-        * @param yLength    length of {@code y}
-        * @return true if carry of most significant byte occurs, false otherwise
-        */
+         * Addition of big integers x and y stored in byte arrays with specified offset and length.
+         * The result is stored into x array argument.
+         * @param x          array with first bignat
+         * @param xOffset    start offset in array of {@code x}
+         * @param xLength    length of {@code x}
+         * @param y          array with second bignat
+         * @param yOffset    start offset in array of {@code y}
+         * @param yLength    length of {@code y}
+         * @return true if carry of most significant byte occurs, false otherwise
+         */
         public static boolean add(byte[] x, short xOffset, short xLength, byte[] y,
-                        short yOffset, short yLength) {
+                                  short yOffset, short yLength) {
             short result = 0;
             short i = (short) (xLength + xOffset - 1);
             short j = (short) (yLength + yOffset - 1);
@@ -2439,16 +2069,16 @@ public class jcmathlib {
         }
 
         /**
-        * Subtracts big integer y from x specified by offset and length.
-        * The result is stored into x array argument.
-        * @param x array with first bignat
+         * Subtracts big integer y from x specified by offset and length.
+         * The result is stored into x array argument.
+         * @param x array with first bignat
          * @param xOffset start offset in array of {@code x}
          * @param xLength length of {@code x}
          * @param y array with second bignat
          * @param yOffset start offset in array of {@code y}
          * @param yLength length of {@code y}
          * @return true if carry of most significant byte occurs, false otherwise
-        */
+         */
         public static boolean subtract(byte[] x, short xOffset, short xLength, byte[] y,
                                        short yOffset, short yLength) {
             short i = (short) (xLength + xOffset - 1);
@@ -2480,31 +2110,31 @@ public class jcmathlib {
         }
 
         /**
-        * Scaled subtraction. Subtracts {@code mult * 2^(}{@link #digit_len}
-        * {@code  * shift) * other} from this.
-        * <P>
-        * That is, shifts {@code mult * other} precisely {@code shift} digits to
-        * the left and subtracts that value from this. {@code mult} must be less
-        * than {@link #bignat_base}, that is, it must fit into one digit. It is
-        * only declared as short here to avoid negative values.
-        * <P>
-        * {@code mult} has type short.
-        * <P>
-        * No size constraint. However, an assertion is thrown, if the result would
-        * be negative. {@code other} can have more digits than this object, but
-        * then sufficiently many leading digits must be zero to avoid the
-        * underflow.
-        * <P>
-        * Used in division.
-        *
-        * @param other
-        *            Bignat to subtract from this object
-        * @param shift
-        *            number of digits to shift {@code other} to the left
-        * @param mult
-        *            of type short, multiple of {@code other} to subtract from this
-        *            object. Must be below {@link #bignat_base}.
-        */
+         * Scaled subtraction. Subtracts {@code mult * 2^(}{@link #digit_len}
+         * {@code  * shift) * other} from this.
+         * <P>
+         * That is, shifts {@code mult * other} precisely {@code shift} digits to
+         * the left and subtracts that value from this. {@code mult} must be less
+         * than {@link #bignat_base}, that is, it must fit into one digit. It is
+         * only declared as short here to avoid negative values.
+         * <P>
+         * {@code mult} has type short.
+         * <P>
+         * No size constraint. However, an assertion is thrown, if the result would
+         * be negative. {@code other} can have more digits than this object, but
+         * then sufficiently many leading digits must be zero to avoid the
+         * underflow.
+         * <P>
+         * Used in division.
+         *
+         * @param other
+         *            Bignat to subtract from this object
+         * @param shift
+         *            number of digits to shift {@code other} to the left
+         * @param mult
+         *            of type short, multiple of {@code other} to subtract from this
+         *            object. Must be below {@link #bignat_base}.
+         */
         public void times_minus(Bignat other, short shift, short mult) {
             short akku = 0;
             short subtraction_result;
@@ -2567,17 +2197,17 @@ public class jcmathlib {
         }
 
         /**
-        * Index of the most significant 1 bit.
-        * <P>
-        * {@code x} has type short.
-        * <P>
-        * Utility method, used in division.
-        *
-        * @param x
-        *            of type short
-        * @return index of the most significant 1 bit in {@code x}, returns
-        *         {@link #double_digit_len} for {@code x == 0}.
-        */
+         * Index of the most significant 1 bit.
+         * <P>
+         * {@code x} has type short.
+         * <P>
+         * Utility method, used in division.
+         *
+         * @param x
+         *            of type short
+         * @return index of the most significant 1 bit in {@code x}, returns
+         *         {@link #double_digit_len} for {@code x == 0}.
+         */
         private static short highest_bit(short x) {
             for (short i = 0; i < double_digit_len; i++) {
                 if (x < 0) {
@@ -2589,31 +2219,31 @@ public class jcmathlib {
         }
 
         /**
-        * Shift to the left and fill. Takes {@code high} {@code middle} {@code low}
-        * as 4 digits, shifts them {@code shift} bits to the left and returns the
-        * most significant {@link #double_digit_len} bits.
-        * <P>
-        * Utility method, used in division.
-        *
-        *
-        * @param high
-        *            of type short, most significant {@link #double_digit_len} bits
-        * @param middle
-        *            of type byte, middle {@link #digit_len} bits
-        * @param low
-        *            of type byte, least significant {@link #digit_len} bits
-        * @param shift
-        *            amount of left shift
-        * @return most significant {@link #double_digit_len} as short
-        */
+         * Shift to the left and fill. Takes {@code high} {@code middle} {@code low}
+         * as 4 digits, shifts them {@code shift} bits to the left and returns the
+         * most significant {@link #double_digit_len} bits.
+         * <P>
+         * Utility method, used in division.
+         *
+         *
+         * @param high
+         *            of type short, most significant {@link #double_digit_len} bits
+         * @param middle
+         *            of type byte, middle {@link #digit_len} bits
+         * @param low
+         *            of type byte, least significant {@link #digit_len} bits
+         * @param shift
+         *            amount of left shift
+         * @return most significant {@link #double_digit_len} as short
+         */
         private static short shift_bits(short high, byte middle, byte low,
-                        short shift) {
+                                        short shift) {
             // shift high
             high <<= shift;
 
             // merge middle bits
             byte mask = (byte) (digit_mask << (shift >= digit_len ? 0 : digit_len
-                            - shift));
+                    - shift));
             short bits = (short) ((short) (middle & mask) & digit_mask);
             if (shift > digit_len) {
                 bits <<= shift - digit_len;
@@ -2636,30 +2266,30 @@ public class jcmathlib {
         }
 
         /**
-        * Scaled comparison. Compares this number with {@code other * 2^(}
-        * {@link #digit_len} {@code * shift)}. That is, shifts {@code other}
-        * {@code shift} digits to the left and compares then. This bignat and
-        * {@code other} will not be modified inside this method.
-        * <P>
-        *
-        * As optimization {@code start} can be greater than zero to skip the first
-        * {@code start} digits in the comparison. These first digits must be zero
-        * then, otherwise an assertion is thrown. (So the optimization takes only
-        * effect when <a
-        * href="../../../overview-summary.html#NO_CARD_ASSERT">NO_CARD_ASSERT</a>
-        * is defined.)
-        *
-        * @param other
-        *            Bignat to compare to
-        * @param shift
-        *            left shift of other before the comparison
-        * @param start
-        *            digits to skip at the beginning
-        * @return true if this number is strictly less than the shifted
-        *         {@code other}, false otherwise.
-        */
+         * Scaled comparison. Compares this number with {@code other * 2^(}
+         * {@link #digit_len} {@code * shift)}. That is, shifts {@code other}
+         * {@code shift} digits to the left and compares then. This bignat and
+         * {@code other} will not be modified inside this method.
+         * <P>
+         *
+         * As optimization {@code start} can be greater than zero to skip the first
+         * {@code start} digits in the comparison. These first digits must be zero
+         * then, otherwise an assertion is thrown. (So the optimization takes only
+         * effect when <a
+         * href="../../../overview-summary.html#NO_CARD_ASSERT">NO_CARD_ASSERT</a>
+         * is defined.)
+         *
+         * @param other
+         *            Bignat to compare to
+         * @param shift
+         *            left shift of other before the comparison
+         * @param start
+         *            digits to skip at the beginning
+         * @return true if this number is strictly less than the shifted
+         *         {@code other}, false otherwise.
+         */
         public boolean shift_lesser(Bignat other, short shift, short start) {
-                short j;
+            short j;
 
             j = (short) (other.size + shift - this.size + start);
             short this_short, other_short;
@@ -2717,22 +2347,22 @@ public class jcmathlib {
 
 
         /**
-        * Comparison of this and other.
-        *
-        * @param other
-        *            Bignat to compare with
-        * @return true if this number is strictly lesser than {@code other}, false
-        *         otherwise.
-        */
+         * Comparison of this and other.
+         *
+         * @param other
+         *            Bignat to compare with
+         * @return true if this number is strictly lesser than {@code other}, false
+         *         otherwise.
+         */
         public boolean lesser(Bignat other) {
             return this.shift_lesser(other, (short) 0, (short) 0);
         }
 
         /**
-        * Test equality with zero.
-        *
-        * @return true if this bignat equals zero.
-        */
+         * Test equality with zero.
+         *
+         * @return true if this bignat equals zero.
+         */
         public boolean is_zero() {
             for (short i = 0; i < size; i++) {
                 if (value[i] != 0) {
@@ -2754,23 +2384,23 @@ public class jcmathlib {
         }
 
         /**
-        * Remainder and Quotient. Divide this number by {@code divisor} and store
-        * the remainder in this. If {@code quotient} is non-null store the quotient
-        * there.
-        * <P>
-        * There are no direct size constraints, but if {@code quotient} is
-        * non-null, it must be big enough for the quotient, otherwise an assertion
-        * is thrown.
-        * <P>
-        * Uses schoolbook division inside and has O^2 complexity in the difference
-        * of significant digits of the divident (in this number) and the divisor.
-        * For numbers of equal size complexity is linear.
-        *
-        * @param divisor
-        *            must be non-zero
-        * @param quotient
-        *            gets the quotient if non-null
-        */
+         * Remainder and Quotient. Divide this number by {@code divisor} and store
+         * the remainder in this. If {@code quotient} is non-null store the quotient
+         * there.
+         * <P>
+         * There are no direct size constraints, but if {@code quotient} is
+         * non-null, it must be big enough for the quotient, otherwise an assertion
+         * is thrown.
+         * <P>
+         * Uses schoolbook division inside and has O^2 complexity in the difference
+         * of significant digits of the divident (in this number) and the divisor.
+         * For numbers of equal size complexity is linear.
+         *
+         * @param divisor
+         *            must be non-zero
+         * @param quotient
+         *            gets the quotient if non-null
+         */
         public void remainder_divide(Bignat divisor, Bignat quotient) {
             // There are some size requirements, namely that quotient must
             // be big enough. However, this depends on the value of the
@@ -2869,7 +2499,7 @@ public class jcmathlib {
                     // 2. both might be very small, in which case the estimated
                     // multiple is very inaccurate.
                     if (divident_digits < 0) {
-                            // case 1: shift both one bit to the right
+                        // case 1: shift both one bit to the right
                         // In standard java (ie. in the test frame) the operation
                         // for >>= and >>>= seems to be done in integers,
                         // even if the left hand side is a short. Therefore,
@@ -2879,10 +2509,10 @@ public class jcmathlib {
                         divident_digits = (short) ((divident_digits >>> 1) & positive_double_digit_mask);
                         divisor_digit = (short) ((first_divisor_digit >>> 1) & positive_double_digit_mask);
                     } else {
-                            // To avoid case 2 shift both to the left
+                        // To avoid case 2 shift both to the left
                         // and add relevant bits.
                         divident_bit_shift = (short) (highest_bit(divident_digits) - 1);
-                            // Below we add one to divisor_digit to avoid underflow.
+                        // Below we add one to divisor_digit to avoid underflow.
                         // Take therefore the highest bit of divisor_digit + 1
                         // to avoid running into the negatives.
                         bit_shift = divident_bit_shift <= divisor_bit_shift ? divident_bit_shift
@@ -2944,29 +2574,29 @@ public class jcmathlib {
         }
 
         /**
-        * Addition with carry report. Adds other to this number. If this is too
-        * small for the result (i.e., an overflow occurs) the method returns true.
-        * Further, the result in {@code this} will then be the correct result of an
-        * addition modulo the first number that does not fit into {@code this} (
-        * {@code 2^(}{@link #digit_len}{@code * }{@link #size this.size}{@code )}),
-        * i.e., only one leading 1 bit is missing. If there is no overflow the
-        * method will return false.
-        * <P>
-        *
-        * It would be more natural to report the overflow with an
-        * {@link javacard.framework.UserException}, however its
-        * {@link javacard.framework.UserException#throwIt throwIt} method dies with
-        * a null pointer exception when it runs in a host test frame...
-        * <P>
-        *
-        * Asserts that the size of other is not greater than the size of this.
-        *
-        * @param other
-        *            Bignat to add
-        * @param otherOffset start offset within other buffer
-        * @param otherLen length of other
-        * @return true if carry occurs, false otherwise
-        */
+         * Addition with carry report. Adds other to this number. If this is too
+         * small for the result (i.e., an overflow occurs) the method returns true.
+         * Further, the result in {@code this} will then be the correct result of an
+         * addition modulo the first number that does not fit into {@code this} (
+         * {@code 2^(}{@link #digit_len}{@code * }{@link #size this.size}{@code )}),
+         * i.e., only one leading 1 bit is missing. If there is no overflow the
+         * method will return false.
+         * <P>
+         *
+         * It would be more natural to report the overflow with an
+         * {@link javacard.framework.UserException}, however its
+         * {@link javacard.framework.UserException#throwIt throwIt} method dies with
+         * a null pointer exception when it runs in a host test frame...
+         * <P>
+         *
+         * Asserts that the size of other is not greater than the size of this.
+         *
+         * @param other
+         *            Bignat to add
+         * @param otherOffset start offset within other buffer
+         * @param otherLen length of other
+         * @return true if carry occurs, false otherwise
+         */
         public boolean add_carry(byte[] other, short otherOffset, short otherLen) {
             short akku = 0;
             short j = (short) (this.size - 1);
@@ -2997,16 +2627,16 @@ public class jcmathlib {
 
 
         /**
-        * Addition. Adds other to this number.
-        * <P>
-        * Same as {@link #times_add times_add}{@code (other, 1)} but without the
-        * multiplication overhead.
-        * <P>
-        * Asserts that the size of other is not greater than the size of this.
-        *
-        * @param other
-        *            Bignat to add
-        */
+         * Addition. Adds other to this number.
+         * <P>
+         * Same as {@link #times_add times_add}{@code (other, 1)} but without the
+         * multiplication overhead.
+         * <P>
+         * Asserts that the size of other is not greater than the size of this.
+         *
+         * @param other
+         *            Bignat to add
+         */
         public void add(Bignat other) {
             add_carry(other);
         }
@@ -3197,18 +2827,18 @@ public class jcmathlib {
         }
 
         /**
-        * Multiplication. Automatically selects fastest available algorithm.
-        * Stores {@code x * y} in this. To ensure this is big
-        * enough for the result it is asserted that the size of this is greater
-        * than or equal to the sum of the sizes of {@code x} and {@code y}.
-        *
-        * @param x
-        *            first factor
-        * @param y
-        *            second factor
-        */
+         * Multiplication. Automatically selects fastest available algorithm.
+         * Stores {@code x * y} in this. To ensure this is big
+         * enough for the result it is asserted that the size of this is greater
+         * than or equal to the sum of the sizes of {@code x} and {@code y}.
+         *
+         * @param x
+         *            first factor
+         * @param y
+         *            second factor
+         */
         public void mult(Bignat x, Bignat y) {
-            if (bnh.bIsSimulator || !bnh.FLAG_FAST_MULT_VIA_RSA || x.length() < Bignat_Helper.FAST_MULT_VIA_RSA_TRESHOLD_LENGTH) {
+            if (!OperationSupport.getInstance().RSA_MULT_TRICK || !bnh.FLAG_FAST_MULT_VIA_RSA || x.length() < Bignat_Helper.FAST_MULT_VIA_RSA_TRESHOLD_LENGTH) {
                 // If simulator or not supported, use slow multiplication
                 // Use slow multiplication also when numbers are small => faster to do in software
                 mult_schoolbook(x, y);
@@ -3228,16 +2858,6 @@ public class jcmathlib {
             for (short i = (short) (y.size - 1); i >= 0; i--) {
                 this.times_add_shift(x, (short) (y.size - 1 - i), (short) (y.value[i] & digit_mask));
             }
-        }
-
-        /**
-         * Performs multiplication of two bignats x and y and stores result into
-         * this. RSA engine is used to speedup operation.
-         * @param x first value to multiply
-         * @param y second value to multiply
-         */
-        public void mult_RSATrick(Bignat x, Bignat y) {
-            mult_rsa_trick(x, y, null, null);
         }
 
         /**
@@ -3466,83 +3086,131 @@ public class jcmathlib {
         }
 
 
-        //
         /**
-         * Computes square root of provided bignat which MUST be prime using Tonelli
+         * Computes square root of provided Bignat which MUST be prime using Tonelli
          * Shanks Algorithm. The result (one of the two roots) is stored to this.
          * @param p value to compute square root from
          */
         public void sqrt_FP(Bignat p) {
-            PM.check(PM.TRAP_BIGNAT_SQRT_1);
-            //1. By factoring out powers of 2, find Q and S such that p-1=Q2^S p-1=Q*2^S and Q is odd
+            // 1. Find Q and S such that p - 1 = Q * 2^S and Q is odd
             bnh.fnc_sqrt_p_1.lock();
             bnh.fnc_sqrt_p_1.clone(p);
-            PM.check(PM.TRAP_BIGNAT_SQRT_2);
             bnh.fnc_sqrt_p_1.decrement_one();
-            PM.check(PM.TRAP_BIGNAT_SQRT_3);
 
-            //Compute Q
-            bnh.fnc_sqrt_Q.lock();
-            bnh.fnc_sqrt_Q.clone(bnh.fnc_sqrt_p_1);
-            bnh.fnc_sqrt_Q.divide_by_2(); //Q /= 2
-            PM.check(PM.TRAP_BIGNAT_SQRT_4);
-
-            //Compute S
             bnh.fnc_sqrt_S.lock();
             bnh.fnc_sqrt_S.set_size(p.length());
             bnh.fnc_sqrt_S.zero();
-            bnh.fnc_sqrt_tmp.lock();
-            bnh.fnc_sqrt_tmp.set_size(p.length());
-            bnh.fnc_sqrt_tmp.zero();
+            bnh.fnc_sqrt_Q.lock();
+            bnh.fnc_sqrt_Q.clone(bnh.fnc_sqrt_p_1);
 
-            PM.check(PM.TRAP_BIGNAT_SQRT_5);
-            while (bnh.fnc_sqrt_tmp.same_value(bnh.fnc_sqrt_Q)==false){
+            while (!bnh.fnc_sqrt_Q.is_odd()) {
                 bnh.fnc_sqrt_S.increment_one();
-                bnh.fnc_sqrt_tmp.mod_mult(bnh.fnc_sqrt_S, bnh.fnc_sqrt_Q, p);
+                bnh.fnc_sqrt_Q.divide_by_2();
             }
-            bnh.fnc_sqrt_tmp.unlock();
-            PM.check(PM.TRAP_BIGNAT_SQRT_6);
-            bnh.fnc_sqrt_S.unlock();
 
-            //2. Find the first quadratic non-residue z by brute-force search
+            // 2. Find the first quadratic non-residue z by brute-force search
             bnh.fnc_sqrt_exp.lock();
             bnh.fnc_sqrt_exp.clone(bnh.fnc_sqrt_p_1);
-            PM.check(PM.TRAP_BIGNAT_SQRT_7);
             bnh.fnc_sqrt_exp.divide_by_2();
-
-            PM.check(PM.TRAP_BIGNAT_SQRT_8);
 
             bnh.fnc_sqrt_z.lock();
             bnh.fnc_sqrt_z.set_size(p.length());
             bnh.fnc_sqrt_z.one();
             bnh.fnc_sqrt_tmp.lock();
+            bnh.fnc_sqrt_tmp.set_size(p.length());
             bnh.fnc_sqrt_tmp.zero();
             bnh.fnc_sqrt_tmp.copy(Bignat_Helper.ONE);
 
-            PM.check(PM.TRAP_BIGNAT_SQRT_9);
-            while (bnh.fnc_sqrt_tmp.same_value(bnh.fnc_sqrt_p_1)==false) {
+            while (!bnh.fnc_sqrt_tmp.same_value(bnh.fnc_sqrt_p_1)) {
                 bnh.fnc_sqrt_z.increment_one();
                 bnh.fnc_sqrt_tmp.copy(bnh.fnc_sqrt_z);
-                bnh.fnc_sqrt_tmp.mod_exp(bnh.fnc_sqrt_exp, p);
+                bnh.fnc_sqrt_tmp.mod_exp(bnh.fnc_sqrt_exp, p); // Euler's criterion
             }
-            PM.check(PM.TRAP_BIGNAT_SQRT_10);
             bnh.fnc_sqrt_p_1.unlock();
             bnh.fnc_sqrt_tmp.unlock();
-            bnh.fnc_sqrt_z.unlock();
+
+            // 3. Compute first candidate
             bnh.fnc_sqrt_exp.copy(bnh.fnc_sqrt_Q);
-            bnh.fnc_sqrt_Q.unlock();
-            PM.check(PM.TRAP_BIGNAT_SQRT_11);
             bnh.fnc_sqrt_exp.increment_one();
-            PM.check(PM.TRAP_BIGNAT_SQRT_12);
             bnh.fnc_sqrt_exp.divide_by_2();
-            PM.check(PM.TRAP_BIGNAT_SQRT_13);
+
+            bnh.fnc_sqrt_t.lock();
+            bnh.fnc_sqrt_t.copy(this);
+            bnh.fnc_sqrt_t.mod_exp(bnh.fnc_sqrt_Q, p);
+
+            if (bnh.fnc_sqrt_t.is_zero()) {
+                bnh.fnc_sqrt_z.unlock();
+                bnh.fnc_sqrt_S.unlock();
+                bnh.fnc_sqrt_t.unlock();
+                bnh.fnc_sqrt_exp.unlock();
+                bnh.fnc_sqrt_Q.unlock();
+                this.zero();
+                return;
+            }
 
             this.mod(p);
-            PM.check(PM.TRAP_BIGNAT_SQRT_14);
             this.mod_exp(bnh.fnc_sqrt_exp, p);
-            PM.check(PM.TRAP_BIGNAT_SQRT_15);
             bnh.fnc_sqrt_exp.unlock();
-        } // end void sqrt(Bignat p)
+
+            if (bnh.fnc_sqrt_t.same_value(Bignat_Helper.ONE)) {
+                bnh.fnc_sqrt_z.unlock();
+                bnh.fnc_sqrt_S.unlock();
+                bnh.fnc_sqrt_t.unlock();
+                bnh.fnc_sqrt_Q.unlock();
+                return;
+            }
+
+            // 4. Search for further candidates
+            bnh.fnc_sqrt_z.mod_exp(bnh.fnc_sqrt_Q, p);
+            bnh.fnc_sqrt_Q.unlock();
+
+            while(true) {
+                bnh.fnc_sqrt_tmp.lock();
+                bnh.fnc_sqrt_tmp.copy(bnh.fnc_sqrt_t);
+                bnh.fnc_sqrt_i.lock();
+                bnh.fnc_sqrt_i.set_size(p.length());
+                bnh.fnc_sqrt_i.zero();
+
+                do {
+                    bnh.fnc_sqrt_tmp.mod_exp2(p);
+                    bnh.fnc_sqrt_i.increment_one();
+                } while (!bnh.fnc_sqrt_tmp.same_value(Bignat_Helper.ONE));
+
+                bnh.fnc_sqrt_tmp.unlock();
+
+                bnh.fnc_sqrt_b.lock();
+                bnh.fnc_sqrt_b.copy(bnh.fnc_sqrt_z);
+                bnh.fnc_sqrt_S.subtract(bnh.fnc_sqrt_i);
+                bnh.fnc_sqrt_S.decrement_one();
+
+                bnh.fnc_sqrt_tmp.lock();
+                bnh.fnc_sqrt_tmp.one();
+                while(!bnh.fnc_sqrt_S.is_zero()) {
+                    bnh.fnc_sqrt_tmp.shift_left();
+                    bnh.fnc_sqrt_S.decrement_one();
+                }
+                bnh.fnc_sqrt_b.mod_exp(bnh.fnc_sqrt_tmp, p); // this is computed wrong
+                bnh.fnc_sqrt_tmp.unlock();
+                bnh.fnc_sqrt_S.copy(bnh.fnc_sqrt_i);
+                bnh.fnc_sqrt_i.unlock();
+                bnh.fnc_sqrt_z.copy(bnh.fnc_sqrt_b);
+                bnh.fnc_sqrt_z.mod_exp2(p);
+                bnh.fnc_sqrt_t.mod_mult(bnh.fnc_sqrt_t, bnh.fnc_sqrt_z, p);
+                this.mod_mult(this, bnh.fnc_sqrt_b, p);
+                bnh.fnc_sqrt_b.unlock();
+
+                if (bnh.fnc_sqrt_t.is_zero()) {
+                    this.zero();
+                    break;
+                }
+                if (bnh.fnc_sqrt_t.same_value(Bignat_Helper.ONE)) {
+                    break;
+                }
+            }
+            bnh.fnc_sqrt_z.unlock();
+            bnh.fnc_sqrt_S.unlock();
+            bnh.fnc_sqrt_t.unlock();
+        }
 
 
         /**
@@ -3572,18 +3240,42 @@ public class jcmathlib {
         }
 
         /**
+         * Computes right bit shift.
+         * The result is stored into this.
+         * @return carry bit
+         */
+        public boolean shift_bits_right() {
+            byte carry = (byte) 0x00;
+            byte previous;
+            for(short i = 0; i < this.size; ++i) {
+                previous = carry;
+                carry = (byte) (this.value[i] & (byte) 0x01);
+                this.value[i] = (byte) (this.value[i] >> (short) 1);
+                if (previous == (byte) 0x01) {
+                    this.value[i] |= (byte) (0x80);
+                } else {
+                    this.value[i] &= (byte) (0x7f);
+                }
+            }
+            return carry == (byte) 0x01;
+        }
+
+        /**
          * Computes {@code res := this ** exponent mod modulo} and store results into this.
          * Uses RSA engine to quickly compute this^exponent % modulo
          * @param exponent value of exponent
          * @param modulo value of modulo
          */
         public void mod_exp(Bignat exponent, Bignat modulo) {
+            if (!OperationSupport.getInstance().RSA_MOD_EXP)
+                ISOException.throwIt(ReturnCodes.SW_OPERATION_NOT_SUPPORTED);
+
             short tmp_size = (short)(bnh.MODULO_RSA_ENGINE_MAX_LENGTH_BITS / 8);
             bnh.fnc_mod_exp_modBN.lock();
             bnh.fnc_mod_exp_modBN.set_size(tmp_size);
 
             short len = n_mod_exp(tmp_size, this, exponent.as_byte_array(), exponent.length(), modulo, bnh.fnc_mod_exp_modBN.value, (short) 0);
-            if (bnh.bIsSimulator) {
+            if (OperationSupport.getInstance().RSA_PREPEND_ZEROS) {
                 // Decrypted length can be either tmp_size or less because of leading zeroes consumed by simulator engine implementation
                 // Move obtained value into proper position with zeroes prepended
                 if (len != tmp_size) {
@@ -3674,7 +3366,7 @@ public class jcmathlib {
             // Potential problem: we are changing key value for publicKey already used before with occ.bnHelper.modCipher.
             // Simulator and potentially some cards fail to initialize this new value properly (probably assuming that same key object will always have same value)
             // Fix (if problem occure): generate new key object: RSAPublicKey publicKey = (RSAPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PUBLIC, (short) (baseLen * 8), false);
-            if(bnh.bIsSimulator) {
+            if(OperationSupport.getInstance().RSA_KEY_REFRESH) {
                 bnh.fnc_NmodE_pubKey = (RSAPublicKey) KeyBuilder.buildKey(javacard.security.KeyBuilder.TYPE_RSA_PUBLIC, (short) (baseLen * 8), false);
             }
             bnh.fnc_NmodE_pubKey.setExponent(exponent, (short) 0, exponentLen);
@@ -3755,7 +3447,7 @@ public class jcmathlib {
         public short from_byte_array(short from_array_length, short this_offset, byte[] from_array, short from_array_offset) {
             short max
                     = (short) (this_offset + from_array_length) <= this.size
-                            ? from_array_length : (short) (this.size - this_offset);
+                    ? from_array_length : (short) (this.size - this_offset);
             Util.arrayCopyNonAtomic(from_array, from_array_offset, value, this_offset, max);
             if ((short) (this_offset + from_array_length) == this.size) {
                 return (short) (from_array_length + 1);
@@ -3790,90 +3482,12 @@ public class jcmathlib {
         }
     }
 
-    static class SecP256k1 {
-
-        public final static short KEY_LENGTH = 256; // Bits
-        public final static short POINT_SIZE = 65; // Bytes
-        public final static short COORD_SIZE = 32; // Bytes
-
-        public final static byte[] p = {
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
-                (byte) 0xff, (byte) 0xff, (byte) 0xfc, (byte) 0x2f
-        };
-
-        public final static byte[] a = {
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00
-        };
-
-        public final static byte[] b = {
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x07
-        };
-
-        public final static byte[] G = {
-                (byte) 0x04,
-                (byte) 0x79, (byte) 0xbe, (byte) 0x66, (byte) 0x7e,
-                (byte) 0xf9, (byte) 0xdc, (byte) 0xbb, (byte) 0xac,
-                (byte) 0x55, (byte) 0xa0, (byte) 0x62, (byte) 0x95,
-                (byte) 0xce, (byte) 0x87, (byte) 0x0b, (byte) 0x07,
-                (byte) 0x02, (byte) 0x9b, (byte) 0xfc, (byte) 0xdb,
-                (byte) 0x2d, (byte) 0xce, (byte) 0x28, (byte) 0xd9,
-                (byte) 0x59, (byte) 0xf2, (byte) 0x81, (byte) 0x5b,
-                (byte) 0x16, (byte) 0xf8, (byte) 0x17, (byte) 0x98,
-                (byte) 0x48, (byte) 0x3a, (byte) 0xda, (byte) 0x77,
-                (byte) 0x26, (byte) 0xa3, (byte) 0xc4, (byte) 0x65,
-                (byte) 0x5d, (byte) 0xa4, (byte) 0xfb, (byte) 0xfc,
-                (byte) 0x0e, (byte) 0x11, (byte) 0x08, (byte) 0xa8,
-                (byte) 0xfd, (byte) 0x17, (byte) 0xb4, (byte) 0x48,
-                (byte) 0xa6, (byte) 0x85, (byte) 0x54, (byte) 0x19,
-                (byte) 0x9c, (byte) 0x47, (byte) 0xd0, (byte) 0x8f,
-                (byte) 0xfb, (byte) 0x10, (byte) 0xd4, (byte) 0xb8
-        };
-
-        public final static byte[] r = {
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
-                (byte) 0xba, (byte) 0xae, (byte) 0xdc, (byte) 0xe6,
-                (byte) 0xaf, (byte) 0x48, (byte) 0xa0, (byte) 0x3b,
-                (byte) 0xbf, (byte) 0xd2, (byte) 0x5e, (byte) 0x8c,
-                (byte) 0xd0, (byte) 0x36, (byte) 0x41, (byte) 0x41,
-        };
-    }
-
     /**
      *
      * @author Petr Svenda
      */
     static class Base_Helper {
         final ResourceManager rm;
-
-        /**
-         * Helper flag which signalizes that code is executed inside simulator
-         * (during tests). Is used to address simulator specific behaviour
-         * workaround if required.
-         */
-        public boolean bIsSimulator = false;
 
         public Base_Helper(ResourceManager resman) {
             rm = resman;
@@ -3948,7 +3562,6 @@ public class jcmathlib {
         }
     }
 
-
     /**
      *
      * @author Petr Svenda
@@ -4019,6 +3632,9 @@ public class jcmathlib {
         Bignat fnc_sqrt_tmp;
         Bignat fnc_sqrt_exp;
         Bignat fnc_sqrt_z;
+        Bignat fnc_sqrt_i;
+        Bignat fnc_sqrt_t;
+        Bignat fnc_sqrt_b;
 
         Bignat fnc_mod_minus_2;
 
@@ -4087,11 +3703,14 @@ public class jcmathlib {
             fnc_negate_tmp = rm.helper_BN_B;
 
             fnc_sqrt_S = rm.helper_BN_A;
-            fnc_sqrt_exp = rm.helper_BN_A;
-            fnc_sqrt_p_1 = rm.helper_BN_B;
+            fnc_sqrt_exp = rm.helper_BN_G;
+            fnc_sqrt_p_1 = rm.helper_BN_D;
             fnc_sqrt_Q = rm.helper_BN_C;
-            fnc_sqrt_tmp = rm.helper_BN_D;
-            fnc_sqrt_z = rm.helper_BN_E;
+            fnc_sqrt_tmp = rm.helper_BN_E;
+            fnc_sqrt_z = rm.helper_BN_B;
+            fnc_sqrt_i = rm.helper_BN_G;
+            fnc_sqrt_t = rm.helper_BN_D;
+            fnc_sqrt_b = rm.helper_BN_C;
 
             fnc_mod_mult_tmpThis = rm.helper_BN_E; // mod_mult is called from  fnc_sqrt => requires helper_BN_E not being locked in fnc_sqrt when mod_mult is called
 
@@ -4147,904 +3766,9 @@ public class jcmathlib {
         }
     }
 
-
-
     /**
      *
-    * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class OCUnitTests extends Applet {
-        // Main instruction CLAss
-        public final static byte CLA_OC_UT                  = (byte) 0xB0; // OpenCrypto Unit Tests
-
-        // INStructions
-        // Card Management
-        public final static byte INS_SETUP                  = (byte) 0x01;
-        public final static byte INS_STATUS                 = (byte) 0x02;
-        public final static byte INS_CLEANUP                = (byte) 0x03;
-        //public final static byte INS_TESTRSAMULT                    = (byte) 0x04;
-        public final static byte INS_FREEMEMORY             = (byte) 0x06;
-        public final static byte INS_GET_ALLOCATOR_STATS    = (byte) 0x07;
-        public final static byte INS_GET_PROFILE_LOCKS      = (byte) 0x08;
-
-        //BigNatural and BigInteger Operations
-        public final static byte INS_INT_STR                = (byte) 0x09;
-        public final static byte INS_INT_ADD                = (byte) 0x10;
-        public final static byte INS_INT_SUB                = (byte) 0x11;
-        public final static byte INS_INT_MUL                = (byte) 0x12;
-        public final static byte INS_INT_DIV                = (byte) 0x13;
-        //public final static byte INS_INT_EXP              = (byte) 0x14;
-        public final static byte INS_INT_MOD                = (byte) 0x15;
-
-        public final static byte INS_BN_STR                 = (byte) 0x20;
-        public final static byte INS_BN_ADD                 = (byte) 0x21;
-        public final static byte INS_BN_SUB                 = (byte) 0x22;
-        public final static byte INS_BN_MUL                 = (byte) 0x23;
-        public final static byte INS_BN_EXP                 = (byte) 0x24;
-        public final static byte INS_BN_MOD                 = (byte) 0x25;
-        public final static byte INS_BN_SQRT                = (byte) 0x26;
-        public final static byte INS_BN_MUL_SCHOOL          = (byte) 0x27;
-
-        public final static byte INS_BN_ADD_MOD             = (byte) 0x30;
-        public final static byte INS_BN_SUB_MOD             = (byte) 0x31;
-        public final static byte INS_BN_MUL_MOD             = (byte) 0x32;
-        public final static byte INS_BN_EXP_MOD             = (byte) 0x33;
-        public final static byte INS_BN_INV_MOD             = (byte) 0x34;
-        public final static byte INS_BN_POW2_MOD            = (byte) 0x35;
-
-        //EC Operations
-        public final static byte INS_EC_GEN                 = (byte) 0x40;
-        public final static byte INS_EC_DBL                 = (byte) 0x41;
-        public final static byte INS_EC_ADD                 = (byte) 0x42;
-        public final static byte INS_EC_MUL                 = (byte) 0x43;
-        public final static byte INS_EC_NEG                 = (byte) 0x44;
-        public final static byte INS_EC_SETCURVE_G          = (byte) 0x45;
-        public final static byte INS_EC_COMPARE             = (byte) 0x46;
-
-        public final static byte INS_PERF_SETSTOP = (byte) 0xf5;
-
-
-        static boolean bIsSimulator = false;
-        static boolean bTEST_256b_CURVE = true;
-        static boolean bTEST_512b_CURVE = false;
-
-        short[]         m_memoryInfo = null;
-        short           m_memoryInfoOffset = 0;
-
-        ECConfig        m_ecc = null;
-
-        ECCurve         m_testCurve = null;
-
-        ECPoint         m_testPoint1 = null;
-        ECPoint         m_testPoint2 = null;
-
-        byte[]          m_customG = null;
-        ECCurve         m_testCurveCustom = null;
-        ECPoint         m_testPointCustom = null;
-
-        Bignat          m_testBN1;
-        Bignat          m_testBN2;
-        Bignat          m_testBN3;
-
-        Integer         m_testINT1;
-        Integer         m_testINT2;
-
-        public OCUnitTests() {
-            m_memoryInfo = new short[(short) (7 * 3)]; // Contains RAM and EEPROM memory required for basic library objects
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 1, m_memoryInfo, m_memoryInfoOffset);
-            if (bTEST_256b_CURVE) {
-                m_ecc = new ECConfig((short) 256);
-            }
-            if (bTEST_512b_CURVE) {
-                m_ecc = new ECConfig((short) 512);
-            }
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 2, m_memoryInfo, m_memoryInfoOffset);
-
-
-            // Pre-allocate test objects (no new allocation for every tested operation)
-            if (bTEST_256b_CURVE) {
-                m_testCurve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
-                m_memoryInfoOffset = snapshotAvailableMemory((short) 3, m_memoryInfo, m_memoryInfoOffset);
-                // m_testCurveCustom and m_testPointCustom will have G occasionally changed so we need separate ECCurve
-                m_customG = new byte[(short) SecP256r1.G.length];
-                Util.arrayCopyNonAtomic(SecP256r1.G, (short) 0, m_customG, (short) 0, (short) SecP256r1.G.length);
-                m_testCurveCustom = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, m_customG, SecP256r1.r);
-            }
-            if (bTEST_512b_CURVE) {
-                m_testCurve = new ECCurve(false, P512r1.p, P512r1.a, P512r1.b, P512r1.G, P512r1.r);
-                // m_testCurveCustom and m_testPointCustom will have G occasionally changed so we need separate ECCurve
-                m_customG = new byte[(short) P512r1.G.length];
-                Util.arrayCopyNonAtomic(P512r1.G, (short) 0, m_customG, (short) 0, (short) P512r1.G.length);
-                m_testCurveCustom = new ECCurve(false, P512r1.p, P512r1.a, P512r1.b, m_customG, P512r1.r);
-            }
-
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 5, m_memoryInfo, m_memoryInfoOffset);
-            m_testPoint1 = new ECPoint(m_testCurve, m_ecc.ech);
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 6, m_memoryInfo, m_memoryInfoOffset);
-            m_testPoint2 = new ECPoint(m_testCurve, m_ecc.ech);
-            m_testPointCustom = new ECPoint(m_testCurveCustom, m_ecc.ech);
-
-            // Testing Bignat objects used in tests
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 7, m_memoryInfo, m_memoryInfoOffset);
-            byte memoryType = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            m_testBN1 = new Bignat(m_ecc.MAX_BIGNAT_SIZE, memoryType, m_ecc.bnh);
-            m_memoryInfoOffset = snapshotAvailableMemory((short) 8, m_memoryInfo, m_memoryInfoOffset);
-            m_testBN2 = new Bignat(m_ecc.MAX_BIGNAT_SIZE, memoryType, m_ecc.bnh);
-            m_testBN3 = new Bignat(m_ecc.MAX_BIGNAT_SIZE, memoryType, m_ecc.bnh);
-
-            short intLen = 4;
-            m_testINT1 = new Integer(intLen, m_ecc.bnh);
-            m_testINT2 = new Integer(intLen, m_ecc.bnh);
-        }
-
-        public static void install(byte[] bArray, short bOffset, byte bLength) {
-            // GP-compliant JavaCard applet registration
-            //new UnitTests().register(bArray, (short) (bOffset + 1), bArray[bOffset]);
-            if (bLength == 0) {
-                bIsSimulator = true;
-            }
-            new OCUnitTests().register();
-        }
-
-        public boolean select() {
-            updateAfterReset();
-            return true;
-        }
-        public void process(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            // Good practice: Return 9000 on SELECT
-            if (selectingApplet()) {
-                return;
-            }
-
-            // Check CLA byte
-            if (apdubuf[ISO7816.OFFSET_CLA] != CLA_OC_UT) {
-                ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
-            }
-
-            // Process Input
-            short dataLen = apdu.setIncomingAndReceive(); // returns length of data field
-
-            try {
-                switch (apdubuf[ISO7816.OFFSET_INS]) {
-                    case INS_CLEANUP:
-                        m_ecc.unlockAll();
-                        break;
-                    case INS_FREEMEMORY:
-                        if (!bIsSimulator) {
-                            JCSystem.requestObjectDeletion();
-                        }
-                        break;
-                    case INS_PERF_SETSTOP:
-                        PM.m_perfStop = Util.makeShort(apdubuf[ISO7816.OFFSET_CDATA], apdubuf[(short) (ISO7816.OFFSET_CDATA + 1)]);
-                        break;
-                    case INS_GET_ALLOCATOR_STATS:
-                        short offset = 0;
-                        Util.setShort(apdubuf, offset, m_ecc.rm.memAlloc.getAllocatedInRAM());
-                        offset += 2;
-                        Util.setShort(apdubuf, offset, m_ecc.rm.memAlloc.getAllocatedInEEPROM());
-                        offset += 2;
-                        for (short i = 0; i < (short) m_memoryInfo.length; i++) {
-                            Util.setShort(apdubuf, offset, m_memoryInfo[i]);
-                            offset += 2;
-                        }
-                        apdu.setOutgoingAndSend((short) 0, offset);
-                        break;
-                    case INS_GET_PROFILE_LOCKS:
-                        Util.arrayCopyNonAtomic(m_ecc.rm.locker.profileLockedObjects, (short) 0, apdubuf, (short) 0, (short) m_ecc.rm.locker.profileLockedObjects.length);
-                        apdu.setOutgoingAndSend((short) 0, (short) m_ecc.rm.locker.profileLockedObjects.length);
-                        break;
-
-                    //==============================================================
-                    case INS_EC_GEN:
-                        test_EC_GEN(apdu);
-                        break;
-                    case INS_EC_SETCURVE_G:
-                        test_EC_SETCURVE_G(apdu, dataLen);
-                        break;
-                    case INS_EC_DBL:
-                        test_EC_DBL(apdu);
-                        break;
-
-                    case INS_EC_ADD:
-                        test_EC_ADD(apdu);
-                        break;
-
-                    case INS_EC_MUL:
-                        test_EC_MUL(apdu);
-                        break;
-
-                    case INS_EC_NEG:
-                        test_EC_NEG(apdu);
-                        break;
-
-                    case INS_EC_COMPARE:
-                        test_EC_COMPARE(apdu);
-                        break;
-
-                    //==============================================================
-                    case INS_BN_STR:
-                        test_BN_STR(apdu, dataLen);
-                        break;
-
-                    case INS_BN_ADD:
-                        test_BN_ADD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_SUB:
-                        test_BN_SUB(apdu, dataLen);
-                        break;
-
-                    case INS_BN_MUL:
-                        test_BN_MUL(apdu, dataLen, true);
-                        break;
-                    case INS_BN_MUL_SCHOOL:
-                        test_BN_MUL(apdu, dataLen, false);
-                        break;
-
-                    case INS_BN_EXP:
-                        test_BN_EXP(apdu, dataLen);
-                        break;
-                    case INS_BN_SQRT:
-                        test_BN_SQRT(apdu, dataLen);
-                        break;
-
-                    case INS_BN_MOD:
-                        test_BN_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_ADD_MOD:
-                        test_BN_ADD_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_SUB_MOD:
-                        test_BN_SUB_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_MUL_MOD:
-                        test_BN_MUL_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_EXP_MOD:
-                        test_BN_EXP_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_POW2_MOD:
-                        test_BN_POW2_MOD(apdu, dataLen);
-                        break;
-
-                    case INS_BN_INV_MOD:
-                        test_BN_INV_MOD(apdu, dataLen);
-                        break;
-
-                    // ---------------------------------------
-                    case INS_INT_STR:
-                        test_INT_STR(apdu, dataLen);
-                        break;
-
-                    case INS_INT_ADD:
-                        test_INT_ADD(apdu, dataLen);
-                        break;
-
-                    case INS_INT_SUB:
-                        test_INT_SUB(apdu, dataLen);
-                        break;
-
-                    case INS_INT_MUL:
-                        test_INT_MUL(apdu, dataLen);
-                        break;
-
-                    case INS_INT_DIV:
-                        test_INT_DIV(apdu, dataLen);
-                        break;
-
-                    //case (byte) Configuration.INS_INT_EXP:
-                    //      test_INT_EXP(apdu, dataLen);
-                    //  break;
-                    case INS_INT_MOD:
-                        test_INT_MOD(apdu, dataLen);
-                        break;
-
-                    default:
-                        // good practice: If you don't know the INStruction, say so:
-                        ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
-                }
-                // Capture all reasonable exceptions and change into readable ones (instead of 0x6f00)
-            } catch (ISOException e) {
-                throw e; // Our exception from code, just re-emit
-            } catch (ArrayIndexOutOfBoundsException e) {
-                ISOException.throwIt(ReturnCodes.SW_ArrayIndexOutOfBoundsException);
-            } catch (ArithmeticException e) {
-                ISOException.throwIt(ReturnCodes.SW_ArithmeticException);
-            } catch (ArrayStoreException e) {
-                ISOException.throwIt(ReturnCodes.SW_ArrayStoreException);
-            } catch (NullPointerException e) {
-                ISOException.throwIt(ReturnCodes.SW_NullPointerException);
-            } catch (NegativeArraySizeException e) {
-                ISOException.throwIt(ReturnCodes.SW_NegativeArraySizeException);
-            } catch (CryptoException e) {
-                ISOException.throwIt((short) (ReturnCodes.SW_CryptoException_prefix | e.getReason()));
-            } catch (SystemException e) {
-                ISOException.throwIt((short) (ReturnCodes.SW_SystemException_prefix | e.getReason()));
-            } catch (PINException e) {
-                ISOException.throwIt((short) (ReturnCodes.SW_PINException_prefix | e.getReason()));
-            } catch (TransactionException e) {
-                ISOException.throwIt((short) (ReturnCodes.SW_TransactionException_prefix | e.getReason()));
-            } catch (CardRuntimeException e) {
-                ISOException.throwIt((short) (ReturnCodes.SW_CardRuntimeException_prefix | e.getReason()));
-            } catch (Exception e) {
-                ISOException.throwIt(ReturnCodes.SW_Exception);
-            }
-
-        }
-
-
-        final short snapshotAvailableMemory(short tag, short[] buffer, short bufferOffset) {
-            buffer[bufferOffset] = tag;
-            buffer[(short) (bufferOffset + 1)] = JCSystem.getAvailableMemory(JCSystem.MEMORY_TYPE_TRANSIENT_RESET);
-            buffer[(short) (bufferOffset + 2)] = JCSystem.getAvailableMemory(JCSystem.MEMORY_TYPE_PERSISTENT);
-            return (short) (bufferOffset + 3);
-        }
-
-
-        void test_EC_GEN(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            PM.check(PM.TRAP_EC_GEN_1);
-            m_testPoint1.randomize();
-            PM.check(PM.TRAP_EC_GEN_2);
-
-            short len = m_testPoint1.getW(apdubuf, (short) 0);
-            PM.check(PM.TRAP_EC_GEN_3);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void updateAfterReset() {
-            if (m_testCurve != null) { m_testCurve.updateAfterReset(); }
-            if (m_testCurveCustom != null) {m_testCurveCustom.updateAfterReset(); }
-            if (m_ecc != null) {
-                m_ecc.refreshAfterReset();
-                m_ecc.unlockAll();
-            }
-            if (m_ecc.bnh != null) {m_ecc.bnh.bIsSimulator = bIsSimulator; }
-        }
-        void test_EC_SETCURVE_G(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            Util.arrayCopyNonAtomic(apdubuf, ISO7816.OFFSET_CDATA, m_customG, (short) 0, dataLen);
-            PM.check(PM.TRAP_EC_SETCURVE_1);
-
-            if (apdubuf[ISO7816.OFFSET_P2] == 1) { // If required, complete new custom curve and point is allocated
-                m_testCurveCustom = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, m_customG, SecP256r1.r);
-                m_testPointCustom = new ECPoint(m_testCurveCustom, m_ecc.ech);
-                PM.check(PM.TRAP_EC_SETCURVE_2);
-                // Release unused previous objects
-                if (!bIsSimulator) {
-                    JCSystem.requestObjectDeletion();
-                }
-            }
-            else {
-                // Otherwise, only G is set and relevant objects are updated
-                m_testCurveCustom.setG(apdubuf, (short) ISO7816.OFFSET_CDATA, m_testCurveCustom.POINT_SIZE);
-                m_testPointCustom.updatePointObjects(); // After changing curve parameters, internal objects needs to be actualized
-            }
-       }
-
-        void test_EC_DBL(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            PM.check(PM.TRAP_EC_DBL_1);
-            m_testPointCustom.setW(apdubuf, (short) ISO7816.OFFSET_CDATA, m_testCurveCustom.POINT_SIZE);
-            // NOTE: for doubling, curve G must be also set. Here we expect that test_EC_SETCURVE_G() was called before
-            PM.check(PM.TRAP_EC_DBL_2);
-            m_testPointCustom.makeDouble(); //G + G
-            PM.check(PM.TRAP_EC_DBL_3);
-
-            short len = m_testPointCustom.getW(apdubuf, (short) 0);
-            PM.check(PM.TRAP_EC_DBL_4);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_EC_ADD(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            PM.check(PM.TRAP_EC_ADD_1);
-            m_testPoint1.setW(apdubuf, (short) ISO7816.OFFSET_CDATA, m_testCurve.POINT_SIZE);
-            PM.check(PM.TRAP_EC_ADD_2);
-            m_testPoint2.setW(apdubuf, (short) (ISO7816.OFFSET_CDATA + m_testCurve.POINT_SIZE), m_testCurve.POINT_SIZE);
-            PM.check(PM.TRAP_EC_ADD_3);
-            m_testPoint1.add(m_testPoint2);
-            PM.check(PM.TRAP_EC_ADD_4);
-
-            short len = m_testPoint1.getW(apdubuf, (short) 0);
-            PM.check(PM.TRAP_EC_ADD_5);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_EC_MUL(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1_len = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_EC_MUL_1);
-            Bignat scalar = m_testBN1;
-            scalar.set_size(p1_len);
-            scalar.from_byte_array(p1_len, (short) 0, apdubuf, ISO7816.OFFSET_CDATA);
-            PM.check(PM.TRAP_EC_MUL_2);
-            m_testPoint1.setW(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1_len), m_testCurve.POINT_SIZE);
-            PM.check(PM.TRAP_EC_MUL_3);
-            m_testPoint1.multiplication(scalar);
-            PM.check(PM.TRAP_EC_MUL_4);
-
-            short len = m_testPoint1.getW(apdubuf, (short) 0);
-            PM.check(PM.TRAP_EC_MUL_5);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_EC_NEG(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1_len = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            m_testPoint1.setW(apdubuf, ISO7816.OFFSET_CDATA, p1_len);
-            m_testPoint1.negate();
-            short len = m_testPoint1.getW(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-
-        void test_EC_COMPARE(APDU apdu) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1_len = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2_len = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            m_testPoint1.setW(apdubuf, (short) ISO7816.OFFSET_CDATA, p1_len);
-            m_testPoint2.setW(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1_len), p2_len);
-            apdubuf[0] = 0; apdubuf[1] = 0; apdubuf[2] = 0; apdubuf[3] = 0; // Tests expects big integer
-            apdubuf[4] = m_testPoint1.isEqual(m_testPoint2) ? (byte) 1 : (byte) 0;
-            apdu.setOutgoingAndSend((short) 0, (short) 5);
-        }
-
-
-        void test_BN_STR(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-
-            PM.check(PM.TRAP_BN_STR_1);
-            Bignat num = m_testBN1;
-            num.set_size(dataLen);
-            PM.check(PM.TRAP_BN_STR_2);
-            num.from_byte_array(dataLen, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            PM.check(PM.TRAP_BN_STR_3);
-            short len = num.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_ADD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_ADD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_ADD_2);
-            Bignat num2 = m_testBN2;
-            num2.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_ADD_3);
-            Bignat sum = m_testBN3;
-            sum.set_size((short) (p1 + 1));
-
-            PM.check(PM.TRAP_BN_ADD_4);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            num2.from_byte_array((short) (dataLen - p1), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_ADD_5);
-            sum.copy(num1);
-            PM.check(PM.TRAP_BN_ADD_6);
-            sum.add(num2);
-            PM.check(PM.TRAP_BN_ADD_7);
-            short len = sum.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_SUB(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_SUB_1);
-            Bignat sub1 = m_testBN1;
-            sub1.set_size(p1);
-            PM.check(PM.TRAP_BN_SUB_2);
-            Bignat sub2 = m_testBN2;
-            sub2.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_SUB_3);
-            Bignat result = m_testBN3;
-            result.set_size((short) (p1 + 1));
-            PM.check(PM.TRAP_BN_SUB_4);
-            sub1.from_byte_array(dataLen, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            sub2.from_byte_array(dataLen, (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_SUB_5);
-            result.copy(sub1);
-            PM.check(PM.TRAP_BN_SUB_6);
-            result.subtract(sub2);
-            PM.check(PM.TRAP_BN_SUB_7);
-            short len = result.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_MUL(APDU apdu, short dataLen, boolean bFastEngine) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_MUL_1);
-            Bignat mul1 = m_testBN1;
-            mul1.set_size(p1);
-            PM.check(PM.TRAP_BN_MUL_2);
-            Bignat mul2 = m_testBN2;
-            mul2.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_MUL_3);
-            Bignat product = m_testBN3;
-            product.set_size(dataLen);
-            PM.check(PM.TRAP_BN_MUL_4);
-            mul1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            mul2.from_byte_array((short)(dataLen-p1), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_MUL_5);
-            if (bFastEngine && !bIsSimulator) {
-                product.mult_rsa_trick(mul1, mul2, null, null);
-            }
-            else {
-                product.mult_schoolbook(mul1, mul2);
-            }
-            PM.check(PM.TRAP_BN_MUL_6);
-            short len = product.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_EXP(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_EXP_1);
-            Bignat base = m_testBN1;
-            base.set_size(p1);
-            PM.check(PM.TRAP_BN_EXP_2);
-            Bignat exp = m_testBN2;
-            exp.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_EXP_3);
-            Bignat res = m_testBN3;
-            res.set_size((short) (m_ecc.MAX_BIGNAT_SIZE / 2));
-            PM.check(PM.TRAP_BN_EXP_4);
-            base.from_byte_array(p1, (short) 0, apdubuf, ISO7816.OFFSET_CDATA);
-            exp.from_byte_array((short) (dataLen - p1), (short) 0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_EXP_5);
-            res.exponentiation(base, exp);
-            PM.check(PM.TRAP_BN_EXP_6);
-            short len = res.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_SQRT(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            Bignat num = m_testBN1;
-            num.set_size(p1);
-            num.from_byte_array(p1, p1, apdubuf, ISO7816.OFFSET_CDATA);
-            Bignat num2 = m_testBN2;
-            num2.clone(m_testCurve.pBN);
-            num.sqrt_FP(num2);
-            short len = num.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-
-        void test_BN_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_MOD_1);
-            Bignat num = m_testBN1;
-            num.set_size(p1);
-            PM.check(PM.TRAP_BN_MOD_2);
-            Bignat mod = m_testBN2;
-            mod.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_MOD_3);
-            num.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            mod.from_byte_array((short)(dataLen-p1), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_MOD_4);
-            num.mod(mod);
-            PM.check(PM.TRAP_BN_MOD_5);
-            short len = num.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_ADD_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_ADD_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_ADD_MOD_2);
-            Bignat num2 = m_testBN2;
-            num2.set_size(p2);
-            PM.check(PM.TRAP_BN_ADD_MOD_3);
-            Bignat mod = m_testBN3;
-            mod.set_size((short) (dataLen - p1 - p2));
-            PM.check(PM.TRAP_BN_ADD_MOD_4);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            num2.from_byte_array(p2, (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_ADD_MOD_5);
-            mod.from_byte_array((short)(dataLen-p1-p2), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1+p2));
-            PM.check(PM.TRAP_BN_ADD_MOD_6);
-            num1.mod_add(num2, mod);
-            PM.check(PM.TRAP_BN_ADD_MOD_7);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_SUB_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_SUB_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_SUB_MOD_2);
-            Bignat num2 = m_testBN2;
-            num2.set_size(p2);
-            PM.check(PM.TRAP_BN_SUB_MOD_3);
-            Bignat mod = m_testBN3;
-            mod.set_size((short) (dataLen - p1 - p2));
-            PM.check(PM.TRAP_BN_SUB_MOD_4);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            num2.from_byte_array(p2, (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            mod.from_byte_array((short)(dataLen-p1-p2), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1+p2));
-            PM.check(PM.TRAP_BN_SUB_MOD_5);
-            num1.mod_sub(num2, mod);
-            PM.check(PM.TRAP_BN_SUB_MOD_6);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_MUL_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_MUL_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_MUL_MOD_2);
-            Bignat num2 = m_testBN2;
-            num2.set_size(p2);
-            PM.check(PM.TRAP_BN_MUL_MOD_3);
-            Bignat mod = m_testBN3;
-            mod.set_size((short) (dataLen - p1 - p2));
-            PM.check(PM.TRAP_BN_MUL_MOD_4);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            num2.from_byte_array(p2, (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            mod.from_byte_array((short)(dataLen-p1-p2), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1+p2));
-            PM.check(PM.TRAP_BN_MUL_MOD_5);
-            num1.mod_mult(num1, num2, mod);
-            PM.check(PM.TRAP_BN_MUL_MOD_6);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_EXP_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_EXP_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_EXP_MOD_2);
-            Bignat num2 = m_testBN2;
-            num2.set_size(p2);
-            PM.check(PM.TRAP_BN_EXP_MOD_3);
-            Bignat mod = m_testBN3;
-            mod.set_size((short) (dataLen - p1 - p2));
-            PM.check(PM.TRAP_BN_EXP_MOD_4);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            num2.from_byte_array(p2, (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            mod.from_byte_array((short)(dataLen-p1-p2), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1+p2));
-            PM.check(PM.TRAP_BN_EXP_MOD_5);
-            num1.mod_exp(num2, mod);
-            PM.check(PM.TRAP_BN_EXP_MOD_6);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_POW2_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-            short p2 = (short) (apdubuf[ISO7816.OFFSET_P2] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_POW2_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            Bignat mod = m_testBN3;
-            mod.set_size((short) (dataLen - p1));
-            num1.from_byte_array(p1, (short) 0, apdubuf, ISO7816.OFFSET_CDATA);
-            mod.from_byte_array((short) (dataLen - p1), (short) 0, apdubuf, (short) (ISO7816.OFFSET_CDATA + p1));
-            PM.check(PM.TRAP_BN_POW2_MOD_2);
-            //num1.pow2Mod_RSATrick(mod);
-            num1.mod_exp2(mod);
-            PM.check(PM.TRAP_BN_POW2_MOD_3);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_BN_INV_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_BN_INV_MOD_1);
-            Bignat num1 = m_testBN1;
-            num1.set_size(p1);
-            PM.check(PM.TRAP_BN_INV_MOD_2);
-            Bignat mod = m_testBN2;
-            mod.set_size((short) (dataLen - p1));
-            PM.check(PM.TRAP_BN_INV_MOD_3);
-            num1.from_byte_array(p1, (short)0, apdubuf, ISO7816.OFFSET_CDATA);
-            mod.from_byte_array((short)(dataLen-p1), (short)0, apdubuf, (short)(ISO7816.OFFSET_CDATA+p1));
-            PM.check(PM.TRAP_BN_INV_MOD_4);
-            num1.mod_inv(mod);
-            PM.check(PM.TRAP_BN_INV_MOD_5);
-            short len = num1.copy_to_buffer(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_STR(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_STR_1);
-            //Integer num_int = new Integer(dataLen, (short) 0, apdubuf, ISO7816.OFFSET_CDATA);
-            Integer num_int = m_testINT1;
-            num_int.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, dataLen);
-            PM.check(PM.TRAP_INT_STR_2);
-            short len = num_int.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_ADD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_ADD_1);
-            //Integer num_add_1 = new Integer(dataLen, (short) 0, apdubuf, ISO7816.OFFSET_CDATA);
-            Integer num_add_1 = m_testINT1;
-            num_add_1.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, p1);
-            PM.check(PM.TRAP_INT_ADD_2);
-            //Integer num_add_2 = new Integer((short) (dataLen - p1), (short) 0, apdubuf, (short) (ISO7816.OFFSET_CDATA + p1));
-            Integer num_add_2 = m_testINT2;
-            num_add_2.fromByteArray(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1), p1);
-            PM.check(PM.TRAP_INT_ADD_3);
-            num_add_1.add(num_add_2);
-            PM.check(PM.TRAP_INT_ADD_4);
-            short len = num_add_1.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_SUB(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_SUB_1);
-            Integer num_sub_1 = m_testINT1;
-            num_sub_1.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, p1);
-            Integer num_sub_2 = m_testINT2;
-            num_sub_2.fromByteArray(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1), p1);
-            PM.check(PM.TRAP_INT_SUB_2);
-
-            num_sub_1.subtract(num_sub_2);
-            PM.check(PM.TRAP_INT_SUB_3);
-            short len = num_sub_1.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_MUL(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_MUL_1);
-            Integer num_mul_1 = m_testINT1;
-            num_mul_1.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, p1);
-            Integer num_mul_2 = m_testINT2;
-            num_mul_2.fromByteArray(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1), p1);
-            PM.check(PM.TRAP_INT_MUL_2);
-
-            num_mul_1.multiply(num_mul_2);
-            PM.check(PM.TRAP_INT_MUL_3);
-            short len = num_mul_1.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_DIV(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_DIV_1);
-            Integer num_div_1 = m_testINT1;
-            num_div_1.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, p1);
-            Integer num_div_2 = m_testINT2;
-            num_div_2.fromByteArray(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1), p1);
-            PM.check(PM.TRAP_INT_DIV_2);
-
-            num_div_1.divide(num_div_2);
-            PM.check(PM.TRAP_INT_DIV_3);
-
-            short len = num_div_1.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-
-        void test_INT_MOD(APDU apdu, short dataLen) {
-            byte[] apdubuf = apdu.getBuffer();
-            short p1 = (short) (apdubuf[ISO7816.OFFSET_P1] & 0x00FF);
-
-            PM.check(PM.TRAP_INT_MOD_1);
-            Integer num_mod_1 = m_testINT1;
-            num_mod_1.fromByteArray(apdubuf, ISO7816.OFFSET_CDATA, p1);
-            Integer num_mod_2 = m_testINT2;
-            num_mod_2.fromByteArray(apdubuf, (short) (ISO7816.OFFSET_CDATA + p1), p1);
-            PM.check(PM.TRAP_INT_MOD_2);
-
-            num_mod_1.modulo(num_mod_2);
-            PM.check(PM.TRAP_INT_MOD_3);
-            short len = num_mod_1.toByteArray(apdubuf, (short) 0);
-            apdu.setOutgoingAndSend((short) 0, len);
-        }
-    }
-
-
-    /**
-     *
-     * @author Petr Svenda
-     */
-    static class ECExample extends Applet {
-        ECConfig        ecc = null;
-        ECCurve         curve = null;
-        ECPoint         point1 = null;
-        ECPoint         point2 = null;
-
-        final static byte[] ECPOINT_TEST_VALUE = {(byte)0x04, (byte) 0x3B, (byte) 0xC1, (byte) 0x5B, (byte) 0xE5, (byte) 0xF7, (byte) 0x52, (byte) 0xB3, (byte) 0x27, (byte) 0x0D, (byte) 0xB0, (byte) 0xAE, (byte) 0xF2, (byte) 0xBC, (byte) 0xF0, (byte) 0xEC, (byte) 0xBD, (byte) 0xB5, (byte) 0x78, (byte) 0x8F, (byte) 0x88, (byte) 0xE6, (byte) 0x14, (byte) 0x32, (byte) 0x30, (byte) 0x68, (byte) 0xC4, (byte) 0xC4, (byte) 0x88, (byte) 0x6B, (byte) 0x43, (byte) 0x91, (byte) 0x4C, (byte) 0x22, (byte) 0xE1, (byte) 0x67, (byte) 0x68, (byte) 0x3B, (byte) 0x32, (byte) 0x95, (byte) 0x98, (byte) 0x31, (byte) 0x19, (byte) 0x6D, (byte) 0x41, (byte) 0x88, (byte) 0x0C, (byte) 0x9F, (byte) 0x8C, (byte) 0x59, (byte) 0x67, (byte) 0x60, (byte) 0x86, (byte) 0x1A, (byte) 0x86, (byte) 0xF8, (byte) 0x0D, (byte) 0x01, (byte) 0x46, (byte) 0x0C, (byte) 0xB5, (byte) 0x8D, (byte) 0x86, (byte) 0x6C, (byte) 0x09};
-        final static byte[] SCALAR_TEST_VALUE = {(byte) 0xE8, (byte) 0x05, (byte) 0xE8, (byte) 0x02, (byte) 0xBF, (byte) 0xEC, (byte) 0xEE, (byte) 0x91, (byte) 0x9B, (byte) 0x3D, (byte) 0x3B, (byte) 0xD8, (byte) 0x3C, (byte) 0x7B, (byte) 0x52, (byte) 0xA5, (byte) 0xD5, (byte) 0x35, (byte) 0x4C, (byte) 0x4C, (byte) 0x06, (byte) 0x89, (byte) 0x80, (byte) 0x54, (byte) 0xB9, (byte) 0x76, (byte) 0xFA, (byte) 0xB1, (byte) 0xD3, (byte) 0x5A, (byte) 0x10, (byte) 0x91};
-
-        public ECExample() {
-            // Pre-allocate all helper structures
-            ecc = new ECConfig((short) 256);
-            // Pre-allocate standard SecP256r1 curve and two EC points on this curve
-            curve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
-            point1 = new ECPoint(curve, ecc.ech);
-            point2 = new ECPoint(curve, ecc.ech);
-        }
-
-        public static void install(byte[] bArray, short bOffset, byte bLength) {
-            new ECExample().register();
-        }
-
-        public boolean select() {
-            ecc.refreshAfterReset();
-            return true;
-        }
-
-        public void process(APDU apdu) {
-            if (selectingApplet()) { return; }
-            // NOTE: very simple EC usage example - no cla/ins, no communication with host...
-            point1.randomize(); // Generate first point at random
-            point2.setW(ECPOINT_TEST_VALUE, (short) 0, (short) ECPOINT_TEST_VALUE.length); // Set second point to predefined value
-            point1.add(point2); // Add two points together
-            point1.multiplication(SCALAR_TEST_VALUE, (short) 0, (short) SCALAR_TEST_VALUE.length); // Multiply point by large scalar
-        }
-    }
-
-
-    /**
-     *
-    * @author Vasilios Mavroudis and Petr Svenda
+     * @author Vasilios Mavroudis and Petr Svenda
      */
     static class ObjectLocker {
         /**
@@ -5307,7 +4031,7 @@ public class jcmathlib {
      * quick personalization and optimization of memory use when compiling for cards
      * with more/less available memory.
      *
-    * @author Petr Svenda
+     * @author Petr Svenda
      */
     static class ObjectAllocator {
         short allocatedInRAM = 0;
@@ -5322,15 +4046,17 @@ public class jcmathlib {
         public static final byte BNH_helper_BN_D         = 5;
         public static final byte BNH_helper_BN_E         = 6;
         public static final byte BNH_helper_BN_F         = 7;
+        public static final byte BNH_helper_BN_G         = 8;
 
-        public static final byte ECPH_helperEC_BN_A      = 8;
-        public static final byte ECPH_helperEC_BN_B      = 9;
-        public static final byte ECPH_helperEC_BN_C      = 10;
-        public static final byte ECPH_helperEC_BN_D      = 11;
-        public static final byte ECPH_helperEC_BN_E      = 12;
-        public static final byte ECPH_helperEC_BN_F      = 13;
-        public static final byte ECPH_uncompressed_point_arr1 = 14;
-        public static final byte ECPH_hashArray          = 15;
+        public static final byte ECPH_helperEC_BN_A      = 9;
+        public static final byte ECPH_helperEC_BN_B      = 10;
+        public static final byte ECPH_helperEC_BN_C      = 11;
+        public static final byte ECPH_helperEC_BN_D      = 12;
+        public static final byte ECPH_helperEC_BN_E      = 13;
+        public static final byte ECPH_helperEC_BN_F      = 14;
+        public static final byte ECPH_uncompressed_point_arr1 = 15;
+        public static final byte ECPH_uncompressed_point_arr2 = 16;
+        public static final byte ECPH_hashArray          = 17;
 
         public static final short ALLOCATOR_TYPE_ARRAY_LENGTH = (short) (ECPH_hashArray + 1);
 
@@ -5371,6 +4097,7 @@ public class jcmathlib {
             ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_D] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
             ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_E] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
             ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_F] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_G] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
             ALLOCATOR_TYPE_ARRAY[ECPH_helperEC_BN_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
             ALLOCATOR_TYPE_ARRAY[ECPH_helperEC_BN_C] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
             ALLOCATOR_TYPE_ARRAY[ECPH_uncompressed_point_arr1] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
@@ -5437,4 +4164,79 @@ public class jcmathlib {
             allocatedInEEPROM = 0;
         }
     }
+
+    /**
+     * OperationSupport class
+     *
+     * @author Antonin Dufka
+     */
+    static class OperationSupport {
+        private static OperationSupport instance;
+
+        public static final short SIMULATOR = (short) 0x0000;
+        public static final short J2E145G = 0x0001;
+        public static final short J3H145 = 0x0002;
+
+        public boolean PRECISE_CURVE_BITLENGTH = true;
+        public boolean RSA_MULT_TRICK = false;
+        public boolean RSA_MOD_EXP = true;
+        public boolean RSA_PREPEND_ZEROS = false;
+        public boolean RSA_KEY_REFRESH = false;
+        public boolean ECDH_X_ONLY = true;
+        public boolean ECDH_XY = false;
+
+        private OperationSupport() {}
+
+        public static OperationSupport getInstance() {
+            if (OperationSupport.instance == null)
+                OperationSupport.instance = new OperationSupport();
+            return OperationSupport.instance;
+        }
+
+        public void setCard(short card_identifier) {
+            switch (card_identifier) {
+                case SIMULATOR:
+                    PRECISE_CURVE_BITLENGTH = false;
+                    RSA_MULT_TRICK = false;
+                    RSA_PREPEND_ZEROS = true;
+                    RSA_KEY_REFRESH = true;
+                    ECDH_XY = true;
+                    break;
+                case J2E145G:
+                    PRECISE_CURVE_BITLENGTH = true;
+                    RSA_MULT_TRICK = true;
+                    break;
+                case J3H145:
+                    RSA_MOD_EXP = false;
+                    ECDH_XY = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        public void setAutomatically() {
+            ECDH_XY = testECDHXY();
+            ECDH_X_ONLY = testECDHX();
+        }
+
+        private boolean testECDHXY() {
+            try {
+                KeyAgreement.getInstance(jcmathlib.ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN_XY, false);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        private boolean testECDHX() {
+            try {
+                KeyAgreement.getInstance(jcmathlib.ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN, false);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+    }
 }
+
