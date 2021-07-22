@@ -1,9 +1,10 @@
 package tests;
 
-import cardTools.CardManager;
-import cardTools.RunConfig;
-import cardTools.Util;
 import shine.Shine;
+import cz.muni.fi.crocs.rcard.client.CardManager;
+import cz.muni.fi.crocs.rcard.client.CardType;
+import cz.muni.fi.crocs.rcard.client.RunConfig;
+import cz.muni.fi.crocs.rcard.client.Util;
 
 import javax.smartcardio.CardException;
 import javax.smartcardio.CommandAPDU;
@@ -20,10 +21,10 @@ public class BaseTest {
     private static String APPLET_AID = "6d70636170706c6574617070";
     private static byte APPLET_AID_BYTE[] = Util.hexStringToByteArray(APPLET_AID);
 
-    protected RunConfig.CARD_TYPE cardType = RunConfig.CARD_TYPE.JCARDSIMLOCAL;
+    protected CardType cardType = CardType.JCARDSIMLOCAL;
 
     protected boolean simulateStateful = false;
-    protected ProtocolManager statefulCard = null;
+    protected CardManager statefulCard = null;
 
     public BaseTest() {
 
@@ -35,11 +36,11 @@ public class BaseTest {
      * @return
      * @throws Exception
      */
-    public ProtocolManager connect() throws Exception {
+    public CardManager connect() throws Exception {
         return connect(null);
     }
 
-    public ProtocolManager connect(byte[] installData) throws Exception {
+    public CardManager connect(byte[] installData) throws Exception {
         if (simulateStateful && statefulCard != null){
             return statefulCard;
         } else if (simulateStateful){
@@ -50,20 +51,31 @@ public class BaseTest {
         return connectRaw(installData);
     }
 
-    public ProtocolManager connectRaw(byte[] installData) throws Exception {
-        final ProtocolManager cardMngr = new ProtocolManager(true, APPLET_AID_BYTE);
+    public CardManager connectRaw(byte[] installData) throws Exception {
+        final CardManager cardMngr = new CardManager(true, APPLET_AID_BYTE);
         final RunConfig runCfg = RunConfig.getDefaultConfig();
         System.setProperty("com.licel.jcardsim.object_deletion_supported", "1");
         System.setProperty("com.licel.jcardsim.sign.dsasigner.computedhash", "1");
 
-        runCfg.setTestCardType(cardType);
-        runCfg.setTargetReaderIndex(0);
+        // Set to statically seed RandomData in the applet by "02", hexcoded
+        // System.setProperty("com.licel.jcardsim.randomdata.seed", "02");
 
-        // Running on physical card
-        if (cardType != RunConfig.CARD_TYPE.PHYSICAL && cardType != RunConfig.CARD_TYPE.PHYSICAL_JAVAX) {
+        // Set to seed RandomData from the SecureRandom
+        // System.setProperty("com.licel.jcardsim.randomdata.secure", "1");
+
+        runCfg.setTestCardType(cardType);
+        if (cardType == CardType.REMOTE){
+            runCfg.setRemoteAddress("http://127.0.0.1:9901");
+
+            runCfg.setRemoteCardType(CardType.PHYSICAL);
+            // runCfg.setRemoteCardType(CardType.JCARDSIMLOCAL);
+
+            runCfg.setAid(APPLET_AID_BYTE);  // performs select after connect
+
+        } else if (cardType != CardType.PHYSICAL && cardType != CardType.PHYSICAL_JAVAX) {
             // Running in the simulator
             runCfg.setAppletToSimulate(Shine.class)
-                    .setTestCardType(RunConfig.CARD_TYPE.JCARDSIMLOCAL)
+                    .setTestCardType(CardType.JCARDSIMLOCAL)
                     .setbReuploadApplet(true)
                     .setInstallData(installData);
         }
@@ -132,11 +144,11 @@ public class BaseTest {
         return resp;
     }
 
-    public RunConfig.CARD_TYPE getCardType() {
+    public CardType getCardType() {
         return cardType;
     }
 
-    public BaseTest setCardType(RunConfig.CARD_TYPE cardType) {
+    public BaseTest setCardType(CardType cardType) {
         this.cardType = cardType;
         return this;
     }
@@ -151,7 +163,7 @@ public class BaseTest {
     }
 
     public boolean isPhysical() {
-        return cardType == RunConfig.CARD_TYPE.PHYSICAL;
+        return cardType == CardType.PHYSICAL || cardType == CardType.PHYSICAL_JAVAX;
     }
 
     public boolean isStateful(){

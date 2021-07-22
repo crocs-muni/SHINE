@@ -1,6 +1,7 @@
 package tests;
 
-import cardTools.RunConfig;
+import cz.muni.fi.crocs.rcard.client.CardManager;
+import cz.muni.fi.crocs.rcard.client.CardType;
 import org.bouncycastle.math.ec.ECPoint;
 import org.junit.jupiter.api.Test;
 
@@ -20,8 +21,8 @@ public class PerformanceTest extends BaseTest {
     }
 
     public void run() throws Exception {
-        setCardType(RunConfig.CARD_TYPE.JCARDSIMLOCAL);
-        pm = connect();
+        setCardType(CardType.JCARDSIMLOCAL);
+        pm = new ProtocolManager(connect());
         file = new PrintWriter(new FileWriter("measurement.csv", true));
 
         for(int i = 0; i < REPEAT; ++i) {
@@ -30,7 +31,7 @@ public class PerformanceTest extends BaseTest {
         }
 
         file.close();
-        pm.disconnect(true);
+        pm.disconnect();
     }
 
     public void measureKeygen(int groupSize) throws Exception {
