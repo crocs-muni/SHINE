@@ -3,11 +3,24 @@ package tests;
 import cz.muni.fi.crocs.rcard.client.CardType;
 import org.bouncycastle.math.ec.ECPoint;
 import org.junit.jupiter.api.*;
+import org.testng.Assert;
+import shine.Consts;
+
+import java.security.NoSuchAlgorithmException;
+import java.util.Random;
+import java.security.MessageDigest;
+
+import java.math.BigInteger;
 
 public class AppletTest extends BaseTest {
     ProtocolManager pm;
+    MessageDigest hasher;
+    Random rng;
 
-    public AppletTest() {
+    public AppletTest() throws NoSuchAlgorithmException {
+        hasher = MessageDigest.getInstance("SHA-256");
+        rng = new Random();
+        rng.setSeed(0);
         setCardType(CardType.JCARDSIMLOCAL);
     }
 
@@ -22,25 +35,48 @@ public class AppletTest extends BaseTest {
     }
 
     public ECPoint keygen(int groupSize) throws Exception {
+        BigInteger[] privateKeys = new BigInteger[groupSize - 1];
+        ECPoint[] publicKeys = new ECPoint[groupSize - 1];
+        for(int i = 0; i < groupSize - 1; ++i) {
+            privateKeys[i] = new BigInteger(256, rng);
+            publicKeys[i] = pm.generator.multiply(privateKeys[i]);
+        }
+
         byte[] commitment = pm.keygenInitialize(groupSize);
-        for(int i = 0; i < groupSize; ++i) {
-            pm.keygenAddCommitment(i, commitment);
+        pm.keygenAddCommitment(0, commitment);
+        for(int i = 0; i < groupSize - 1; ++i) {
+            pm.keygenAddCommitment(i + 1, hasher.digest(publicKeys[i].getEncoded(false)));
         }
+
         ECPoint key = pm.keygenReveal();
-        for(int i = 0; i < groupSize; ++i) {
-            pm.keygenAddKey(i, key);
+        ECPoint expected = key;
+        pm.keygenAddKey(0, key);
+        for(int i = 0; i < groupSize - 1; ++i) {
+            pm.keygenAddKey(i + 1, publicKeys[i]);
+            expected = expected.add(publicKeys[i]);
         }
-        return pm.keygenFinalize();
+        ECPoint groupKey = pm.keygenFinalize();
+        Assert.assertEquals(expected, groupKey);
+        return groupKey;
+    }
+
+    public BigInteger computeChallenge(ECPoint nonce, ECPoint publicKey, byte[] message) {
+        hasher.reset();
+        hasher.update(nonce.getEncoded(false));
+        hasher.update(publicKey.getEncoded(false));
+        hasher.update(message);
+        return new BigInteger(1, hasher.digest());
     }
 
     @Test
     public void testKeygen() throws Exception {
-        keygen(1);
+        for(int i = 1; i <= Consts.MAX_PARTIES; ++i)
+            keygen(i);
     }
 
     @Test
     public void testSign() throws Exception {
-        keygen(1);
+        ECPoint groupKey = keygen(3);
 
         short counter = 1;
         byte[] message = new byte[32];
@@ -48,7 +84,10 @@ public class AppletTest extends BaseTest {
 
         ECPoint nonce = pm.getNonce(counter);
         byte[] encryptedNonce = pm.cacheNonce(counter + 1);
-        pm.signReveal(counter, nonce, message, keyBuffer);
+        BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer);
+        BigInteger challenge = computeChallenge(nonce, groupKey, message);
+        Assert.assertEquals(pm.generator.multiply(signature), groupKey.multiply(challenge).add(nonce));
+
         pm.revealNonce(counter + 1);
 
         byte[] nonceBytes = new byte[65];
@@ -59,6 +98,8 @@ public class AppletTest extends BaseTest {
         }
         nonce = pm.curve.decodePoint(nonceBytes);
 
-        pm.sign(counter + 1, nonce, message);
+        signature = pm.sign(counter + 1, nonce, message);
+        challenge = computeChallenge(nonce, groupKey, message);
+        Assert.assertEquals(pm.generator.multiply(signature), groupKey.multiply(challenge).add(nonce));
     }
 }
