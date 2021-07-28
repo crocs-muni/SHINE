@@ -34,9 +34,11 @@ public class AppletTest extends BaseTest {
         pm.disconnect();
     }
 
-    public ECPoint keygen(int groupSize) throws Exception {
+    public ECPoint keygen(int groupSize, ECPoint[] publicKeys) throws Exception {
         BigInteger[] privateKeys = new BigInteger[groupSize - 1];
-        ECPoint[] publicKeys = new ECPoint[groupSize - 1];
+        if(publicKeys == null || publicKeys.length != groupSize - 1) {
+            publicKeys = new ECPoint[groupSize - 1];
+        }
         for(int i = 0; i < groupSize - 1; ++i) {
             privateKeys[i] = new BigInteger(256, rng);
             publicKeys[i] = pm.generator.multiply(privateKeys[i]);
@@ -60,6 +62,10 @@ public class AppletTest extends BaseTest {
         return groupKey;
     }
 
+    public ECPoint keygen(int groupSize) throws Exception {
+        return keygen(groupSize, null);
+    }
+
     public BigInteger computeChallenge(ECPoint nonce, ECPoint publicKey, byte[] message) {
         hasher.reset();
         hasher.update(nonce.getEncoded(false));
@@ -76,7 +82,12 @@ public class AppletTest extends BaseTest {
 
     @Test
     public void testSign() throws Exception {
-        ECPoint groupKey = keygen(3);
+        ECPoint[] publicKeys = new ECPoint[2];
+        ECPoint groupKey = keygen(3, publicKeys);
+        ECPoint cardKey = groupKey;
+        for(ECPoint publicKey : publicKeys) {
+            cardKey = cardKey.subtract(publicKey);
+        }
 
         short counter = 1;
         byte[] message = new byte[32];
@@ -86,7 +97,7 @@ public class AppletTest extends BaseTest {
         byte[] encryptedNonce = pm.cacheNonce(counter + 1);
         BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer);
         BigInteger challenge = computeChallenge(nonce, groupKey, message);
-        Assert.assertEquals(pm.generator.multiply(signature), groupKey.multiply(challenge).add(nonce));
+        Assert.assertEquals(pm.generator.multiply(signature), cardKey.multiply(challenge).add(nonce));
 
         pm.revealNonce(counter + 1);
 
@@ -100,6 +111,6 @@ public class AppletTest extends BaseTest {
 
         signature = pm.sign(counter + 1, nonce, message);
         challenge = computeChallenge(nonce, groupKey, message);
-        Assert.assertEquals(pm.generator.multiply(signature), groupKey.multiply(challenge).add(nonce));
+        Assert.assertEquals(pm.generator.multiply(signature), cardKey.multiply(challenge).add(nonce));
     }
 }
