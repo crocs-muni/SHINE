@@ -16,7 +16,7 @@ public class Shine extends Applet implements MultiSelectable
     public ECCurve curve;
 
     public Bignat identitySecret, tmpSecret, groupSecret, signature;
-    public ECPoint identityKey, tmpKey, groupKey;
+    public ECPoint tmpKey, groupKey;
 
     private short groupSize;
 
@@ -39,7 +39,6 @@ public class Shine extends Applet implements MultiSelectable
         curve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
 
         identitySecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
-        identityKey = new ECPoint(curve, ecc.ech);
 
         tmpSecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
         tmpKey = new ECPoint(curve, ecc.ech);
@@ -53,8 +52,6 @@ public class Shine extends Applet implements MultiSelectable
 
         random.generateData(ramArray, (short) 0, (short) 32);
         identitySecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
-        identityKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
-        identityKey.multiplication(identitySecret);
 
         register();
     }
@@ -64,57 +61,47 @@ public class Shine extends Applet implements MultiSelectable
         if (selectingApplet()) // ignore selection command
             return;
 
+        if(apdu.getBuffer()[ISO7816.OFFSET_CLA] != Consts.CLA_SHINE)
+            ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+
         try {
-            if(apdu.getBuffer()[ISO7816.OFFSET_CLA] == Consts.CLA_MPCAPPLET) {
-                switch(apdu.getBuffer()[ISO7816.OFFSET_INS]) {
-                    case Consts.INS_GET_INFO:
-                        getInfo(apdu);
-                        break;
-                    case Consts.INS_GET_IDENTITY:
-                        getIdentity(apdu);
-                        break;
+            switch(apdu.getBuffer()[ISO7816.OFFSET_INS]) {
+                case Consts.INS_INFO:
+                    getInfo(apdu);
+                    break;
+                case Consts.INS_KEYGEN_INITIALIZE:
+                    keygenInitialize(apdu);
+                    break;
+                case Consts.INS_KEYGEN_ADD_COMMITMENT:
+                    keygenAddCommitment(apdu);
+                    break;
+                case Consts.INS_KEYGEN_REVEAL:
+                    keygenReveal(apdu);
+                    break;
+                case Consts.INS_KEYGEN_ADD_KEY:
+                    keygenAddKey(apdu);
+                    break;
+                case Consts.INS_KEYGEN_FINALIZE:
+                    keygenFinalize(apdu);
+                    break;
+                case Consts.INS_GET_NONCE:
+                    getNonce(apdu);
+                    break;
+                case Consts.INS_CACHE_NONCE:
+                    cacheNonce(apdu);
+                    break;
+                case Consts.INS_REVEAL_NONCE:
+                    revealNonce(apdu);
+                    break;
+                case Consts.INS_SIGN:
+                    sign(apdu, false);
+                    break;
+                case Consts.INS_SIGN_REVEAL:
+                    sign(apdu, true);
+                    break;
 
-                    default:
-                        ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
-                }
-            } else if(apdu.getBuffer()[ISO7816.OFFSET_CLA] == Consts.CLA_SHINE) {
-                switch(apdu.getBuffer()[ISO7816.OFFSET_INS]) {
-                    case Consts.INS_KEYGEN_INITIALIZE:
-                        keygenInitialize(apdu);
-                        break;
-                    case Consts.INS_KEYGEN_ADD_COMMITMENT:
-                        keygenAddCommitment(apdu);
-                        break;
-                    case Consts.INS_KEYGEN_REVEAL:
-                        keygenReveal(apdu);
-                        break;
-                    case Consts.INS_KEYGEN_ADD_KEY:
-                        keygenAddKey(apdu);
-                        break;
-                    case Consts.INS_KEYGEN_FINALIZE:
-                        keygenFinalize(apdu);
-                        break;
-                    case Consts.INS_GET_NONCE:
-                        getNonce(apdu);
-                        break;
-                    case Consts.INS_CACHE_NONCE:
-                        cacheNonce(apdu);
-                        break;
-                    case Consts.INS_REVEAL_NONCE:
-                        revealNonce(apdu);
-                        break;
-                    case Consts.INS_SIGN:
-                        sign(apdu, false);
-                        break;
-                    case Consts.INS_SIGN_REVEAL:
-                        sign(apdu, true);
-                        break;
-
-                    default:
-                        ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
-                }
-            } else {
-                ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+                default:
+                    ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
             }
         } catch (ISOException e) {
             throw e; // Our exception from code, just re-emit
@@ -155,12 +142,6 @@ public class Shine extends Applet implements MultiSelectable
         byte[] msg = {(byte) 0x53, (byte) 0x48, (byte) 0x49, (byte) 0x4e, (byte) 0x45}; // SHINE
         Util.arrayCopyNonAtomic(msg, (short) 0, apduBuffer, (short) 0, (short) msg.length);
         apdu.setOutgoingAndSend((short) 0, (short) msg.length);
-    }
-
-    private void getIdentity(APDU apdu) {
-        byte[] apduBuffer = apdu.getBuffer();
-        identityKey.getW(apduBuffer, (short) 0);
-        apdu.setOutgoingAndSend((short) 0, curve.POINT_SIZE);
     }
 
     private void keygenInitialize(APDU apdu) {

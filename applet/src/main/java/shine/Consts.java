@@ -3,21 +3,18 @@ package shine;
 public class Consts {
     public static final byte MAX_PARTIES = 4;
 
-    public static final byte CLA_MPCAPPLET = (byte) 0xC0;
-    public static final byte INS_GET_INFO = (byte) 0xF0;
-    public static final byte INS_GET_IDENTITY = (byte) 0xF1;
-
-    public static final byte CLA_SHINE = (byte) 0xC1;
-    public static final byte INS_KEYGEN_INITIALIZE = (byte) 0xC0;
-    public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0xC1;
-    public static final byte INS_KEYGEN_REVEAL = (byte) 0xC2;
-    public static final byte INS_KEYGEN_ADD_KEY = (byte) 0xC3;
-    public static final byte INS_KEYGEN_FINALIZE = (byte) 0xC4;
-    public static final byte INS_GET_NONCE = (byte) 0xC5;
-    public static final byte INS_CACHE_NONCE = (byte) 0xC7;
-    public static final byte INS_REVEAL_NONCE = (byte) 0xC8;
-    public static final byte INS_SIGN = (byte) 0xC6;
-    public static final byte INS_SIGN_REVEAL = (byte) 0xC9;
+    public static final byte CLA_SHINE = (byte) 0x00;
+    public static final byte INS_INFO = (byte) 0x00;
+    public static final byte INS_KEYGEN_INITIALIZE = (byte) 0x01;
+    public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0x02;
+    public static final byte INS_KEYGEN_REVEAL = (byte) 0x03;
+    public static final byte INS_KEYGEN_ADD_KEY = (byte) 0x04;
+    public static final byte INS_KEYGEN_FINALIZE = (byte) 0x05;
+    public static final byte INS_GET_NONCE = (byte) 0x06;
+    public static final byte INS_CACHE_NONCE = (byte) 0x07;
+    public static final byte INS_REVEAL_NONCE = (byte) 0x08;
+    public static final byte INS_SIGN = (byte) 0x09;
+    public static final byte INS_SIGN_REVEAL = (byte) 0x0a;
 
     static final short E_COMMITMENT_CHECK_FAILED = (short) 0xc100;
     static final short E_USED_NONCE = (short) 0xc101;
