@@ -36,7 +36,7 @@ public class Shine extends Applet implements MultiSelectable
         OperationSupport.getInstance().setCard(OperationSupport.SIMULATOR);
 
         ecc = new ECConfig((short) 256);
-        curve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
+        curve = new ECCurve(false, SecP256k1.p, SecP256k1.a, SecP256k1.b, SecP256k1.G, SecP256k1.r);
 
         identitySecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
         identityKey = new ECPoint(curve, ecc.ech);

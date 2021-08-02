@@ -2,7 +2,7 @@ package tests;
 
 import cz.muni.fi.crocs.rcard.client.CardManager;
 import shine.Consts;
-import shine.jcmathlib.SecP256r1;
+import shine.jcmathlib.SecP256k1;
 import org.junit.jupiter.api.Assertions;
 
 import javax.smartcardio.CardException;
@@ -25,9 +25,9 @@ public class ProtocolManager {
 
     public ProtocolManager(CardManager cm) {
         this.cm = cm;
-        params = ECNamedCurveTable.getParameterSpec("secp256r1");
+        params = ECNamedCurveTable.getParameterSpec("secp256k1");
         curve = params.getCurve();
-        generator = curve.decodePoint(SecP256r1.G);
+        generator = curve.decodePoint(SecP256k1.G);
     }
 
     private ResponseAPDU sendAPDU(int cla, int ins, int p1, int p2) throws Exception {
@@ -65,7 +65,7 @@ public class ProtocolManager {
     public ECPoint keygenReveal() throws Exception {
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_KEYGEN_REVEAL, 0, 0);
         lastOperationTime = cm.getLastTransmitTime();
-        checkLength(resp, SecP256r1.POINT_SIZE);
+        checkLength(resp, SecP256k1.POINT_SIZE);
         return curve.decodePoint(resp.getData());
     }
 
@@ -78,7 +78,7 @@ public class ProtocolManager {
     public ECPoint keygenFinalize() throws Exception {
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_KEYGEN_FINALIZE, 0, 0);
         lastOperationTime = cm.getLastTransmitTime();
-        checkLength(resp, SecP256r1.POINT_SIZE);
+        checkLength(resp, SecP256k1.POINT_SIZE);
         return curve.decodePoint(resp.getData());
     }
 
@@ -104,9 +104,9 @@ public class ProtocolManager {
     }
 
     public BigInteger sign(int counter, ECPoint groupNonce, byte[] message, boolean bip) throws Exception {
-        byte[] data = new byte[SecP256r1.POINT_SIZE + message.length];
-        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256r1.POINT_SIZE);
-        System.arraycopy(message, 0, data, SecP256r1.POINT_SIZE, message.length);
+        byte[] data = new byte[SecP256k1.POINT_SIZE + message.length];
+        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.POINT_SIZE);
+        System.arraycopy(message, 0, data, SecP256k1.POINT_SIZE, message.length);
 
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP : Consts.INS_SIGN, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
@@ -115,9 +115,9 @@ public class ProtocolManager {
     }
 
     public BigInteger signReveal(int counter, ECPoint groupNonce, byte[] message, byte[] keyBuffer, boolean bip) throws Exception {
-        byte[] data = new byte[SecP256r1.POINT_SIZE + message.length];
-        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256r1.POINT_SIZE);
-        System.arraycopy(message, 0, data, SecP256r1.POINT_SIZE, message.length);
+        byte[] data = new byte[SecP256k1.POINT_SIZE + message.length];
+        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.POINT_SIZE);
+        System.arraycopy(message, 0, data, SecP256k1.POINT_SIZE, message.length);
 
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP_REVEAL : Consts.INS_SIGN_REVEAL, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
