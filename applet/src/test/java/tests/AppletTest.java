@@ -133,14 +133,14 @@ public class AppletTest extends BaseTest {
         for(ECPoint publicKey : publicKeys) {
             cardKey = cardKey.subtract(publicKey);
         }
-        ECPoint adjustedKey = groupKey.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? cardKey.negate() : cardKey;
+        ECPoint adjustedKey = groupKey.getAffineYCoord().toBigInteger().mod(BigInteger.valueOf(2)).equals(BigInteger.valueOf(1)) ? cardKey.negate() : cardKey;
 
         short counter = 1;
         byte[] message = new byte[32];
         byte[] keyBuffer = new byte[64];
 
         ECPoint nonce = pm.getNonce(counter);
-        ECPoint adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? nonce.negate() : nonce;
+        ECPoint adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.valueOf(2)).equals(BigInteger.valueOf(1)) ? nonce.negate() : nonce;
         byte[] encryptedNonce = pm.cacheNonce(counter + 1);
         BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer, true);
         BigInteger challenge = computeChallengeBIP(nonce, groupKey, message);
@@ -155,7 +155,7 @@ public class AppletTest extends BaseTest {
             nonceBytes[i + 1] ^= keyBuffer[i];
         }
         nonce = pm.curve.decodePoint(nonceBytes);
-        adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? nonce.negate() : nonce;
+        adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.valueOf(2)).equals(BigInteger.valueOf(1)) ? nonce.negate() : nonce;
 
         signature = pm.sign(counter + 1, nonce, message, true);
         challenge = computeChallengeBIP(nonce, groupKey, message);

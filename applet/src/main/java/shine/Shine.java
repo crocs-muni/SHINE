@@ -322,7 +322,7 @@ public class Shine extends Applet implements MultiSelectable
         }
         prf(counter);
         tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
-        if ((messageBuffer[(short) (messageOffset - 1)] & (byte) 0x01) == 0) {
+        if ((nonceBuffer[(short) (nonceOffset + curve.POINT_SIZE - 1)] & (byte) 0x01) == 0) {
             signature.mod_add(tmpSecret, curve.rBN);
         } else {
             signature.mod_sub(tmpSecret, curve.rBN);
