@@ -59,7 +59,7 @@ public class PerformanceTest extends BaseTest {
         file.printf("GetNonce;%d\n", pm.getLastOperationTime());
         byte[] encryptedNonce = pm.cacheNonce(counter + 1);
         file.printf("CacheNonce;%d\n", pm.getLastOperationTime());
-        pm.signReveal(counter, nonce, message, keyBuffer);
+        pm.signReveal(counter, nonce, message, keyBuffer, false);
         file.printf("SignReveal;%d\n", pm.getLastOperationTime());
         pm.revealNonce(counter + 1);
         file.printf("RevealNonce;%d\n", pm.getLastOperationTime());
@@ -72,7 +72,7 @@ public class PerformanceTest extends BaseTest {
         }
         nonce = pm.curve.decodePoint(nonceBytes);
 
-        pm.sign(counter + 1, nonce, message);
+        pm.sign(counter + 1, nonce, message, false);
         file.printf("Sign;%d\n", pm.getLastOperationTime());
     }
 }

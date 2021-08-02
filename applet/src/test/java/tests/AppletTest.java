@@ -7,6 +7,7 @@ import org.testng.Assert;
 import shine.Consts;
 
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Random;
 import java.security.MessageDigest;
 
@@ -74,6 +75,16 @@ public class AppletTest extends BaseTest {
         return new BigInteger(1, hasher.digest());
     }
 
+    public BigInteger computeChallengeBIP(ECPoint nonce, ECPoint publicKey, byte[] message) {
+        hasher.reset();
+        hasher.update(Consts.TAG_CHALLENGE);
+        hasher.update(Consts.TAG_CHALLENGE);
+        hasher.update(Arrays.copyOfRange(nonce.getEncoded(true), 1, 33));
+        hasher.update(Arrays.copyOfRange(publicKey.getEncoded(true), 1, 33));
+        hasher.update(message);
+        return new BigInteger(1, hasher.digest());
+    }
+
     @Test
     public void testKeygen() throws Exception {
         for(int i = 1; i <= Consts.MAX_PARTIES; ++i)
@@ -95,7 +106,7 @@ public class AppletTest extends BaseTest {
 
         ECPoint nonce = pm.getNonce(counter);
         byte[] encryptedNonce = pm.cacheNonce(counter + 1);
-        BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer);
+        BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer, false);
         BigInteger challenge = computeChallenge(nonce, groupKey, message);
         Assert.assertEquals(pm.generator.multiply(signature), cardKey.multiply(challenge).add(nonce));
 
@@ -109,8 +120,45 @@ public class AppletTest extends BaseTest {
         }
         nonce = pm.curve.decodePoint(nonceBytes);
 
-        signature = pm.sign(counter + 1, nonce, message);
+        signature = pm.sign(counter + 1, nonce, message, false);
         challenge = computeChallenge(nonce, groupKey, message);
         Assert.assertEquals(pm.generator.multiply(signature), cardKey.multiply(challenge).add(nonce));
+    }
+
+    @Test
+    public void testSignBIP() throws Exception {
+        ECPoint[] publicKeys = new ECPoint[2];
+        ECPoint groupKey = keygen(3, publicKeys);
+        ECPoint cardKey = groupKey;
+        for(ECPoint publicKey : publicKeys) {
+            cardKey = cardKey.subtract(publicKey);
+        }
+        ECPoint adjustedKey = groupKey.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? cardKey.negate() : cardKey;
+
+        short counter = 1;
+        byte[] message = new byte[32];
+        byte[] keyBuffer = new byte[64];
+
+        ECPoint nonce = pm.getNonce(counter);
+        ECPoint adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? nonce.negate() : nonce;
+        byte[] encryptedNonce = pm.cacheNonce(counter + 1);
+        BigInteger signature = pm.signReveal(counter, nonce, message, keyBuffer, true);
+        BigInteger challenge = computeChallengeBIP(nonce, groupKey, message);
+        Assert.assertEquals(pm.generator.multiply(signature), adjustedKey.multiply(challenge).add(adjustedNonce));
+
+        pm.revealNonce(counter + 1);
+
+        byte[] nonceBytes = new byte[65];
+        nonceBytes[0] = 0x04;
+        System.arraycopy(encryptedNonce, 0, nonceBytes, 1, 64);
+        for(int i = 0; i < 64; ++i) {
+            nonceBytes[i + 1] ^= keyBuffer[i];
+        }
+        nonce = pm.curve.decodePoint(nonceBytes);
+        adjustedNonce = nonce.getAffineYCoord().toBigInteger().mod(BigInteger.TWO).equals(BigInteger.ONE) ? nonce.negate() : nonce;
+
+        signature = pm.sign(counter + 1, nonce, message, true);
+        challenge = computeChallengeBIP(nonce, groupKey, message);
+        Assert.assertEquals(pm.generator.multiply(signature), adjustedKey.multiply(challenge).add(adjustedNonce));
     }
 }

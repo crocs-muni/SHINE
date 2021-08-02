@@ -536,6 +536,19 @@ public class jcmathlib {
         }
 
         /**
+         * Returns true if Y coordinate is even; false otherwise.
+         *
+         * @return true if Y coordinate is even; false otherwise
+         */
+        public boolean isYEven() {
+            ech.lock(ech.uncompressed_point_arr1);
+            thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
+            boolean result = ech.uncompressed_point_arr1[(short)(theCurve.POINT_SIZE - 1)] % 2 == 0;
+            ech.unlock(ech.uncompressed_point_arr1);
+            return result;
+        }
+
+        /**
          * Compares this and provided point for equality. The comparison is made using hash of both values to prevent leak of position of mismatching byte.
          * @param other second point for comparison
          * @return true if both point are exactly equal (same length, same value), false otherwise
@@ -4203,10 +4216,10 @@ public class jcmathlib {
                     ECDH_XY = true;
                     break;
                 case J2E145G:
-                    PRECISE_CURVE_BITLENGTH = true;
                     RSA_MULT_TRICK = true;
                     break;
                 case J3H145:
+                    PRECISE_CURVE_BITLENGTH = false;
                     RSA_MOD_EXP = false;
                     ECDH_XY = true;
                     break;

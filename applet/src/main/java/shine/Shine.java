@@ -94,10 +94,16 @@ public class Shine extends Applet implements MultiSelectable
                     revealNonce(apdu);
                     break;
                 case Consts.INS_SIGN:
-                    sign(apdu, false);
+                    sign(apdu, false, false);
                     break;
                 case Consts.INS_SIGN_REVEAL:
-                    sign(apdu, true);
+                    sign(apdu, true, false);
+                    break;
+                case Consts.INS_SIGN_BIP:
+                    sign(apdu, false, true);
+                    break;
+                case Consts.INS_SIGN_BIP_REVEAL:
+                    sign(apdu, true, true);
                     break;
 
                 default:
@@ -249,23 +255,18 @@ public class Shine extends Applet implements MultiSelectable
         apdu.setOutgoingAndSend((short) 0, (short) 64);
     }
 
-    private void sign(APDU apdu, boolean reveal) {
+    private void sign(APDU apdu, boolean reveal, boolean bip) {
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
         if(counter < nonceCounter) {
             ISOException.throwIt(Consts.E_USED_NONCE);
         }
         nonceCounter = (short) (counter + 1);
-        hasher.reset();
-        hasher.update(apduBuffer, ISO7816.OFFSET_CDATA, curve.POINT_SIZE);
-        groupKey.getW(ramArray, (short) 0);
-        hasher.update(ramArray, (short) 0, curve.POINT_SIZE);
-        hasher.doFinal(apduBuffer, (short) (ISO7816.OFFSET_CDATA + curve.POINT_SIZE), (short) 32, ramArray, (short) 0);
-        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
-        signature.mod_mult(tmpSecret, groupSecret, curve.rBN);
-        prf(counter);
-        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
-        signature.mod_add(tmpSecret, curve.rBN);
+        if(bip) {
+            signBIP(counter, apduBuffer, ISO7816.OFFSET_CDATA, apduBuffer, (short) (ISO7816.OFFSET_CDATA + curve.POINT_SIZE));
+        } else {
+            signSchnorr(counter, apduBuffer, ISO7816.OFFSET_CDATA, apduBuffer, (short) (ISO7816.OFFSET_CDATA + curve.POINT_SIZE));
+        }
         signature.copy_to_buffer(apduBuffer, (short) 0);
 
         if(reveal) {
@@ -291,5 +292,40 @@ public class Shine extends Applet implements MultiSelectable
         hasher.doFinal(secret, offset, (short) 32, ramArray, (short) 0);
         hasher.reset();
         hasher.doFinal(ramArray, (short) 0, (short) 32, ramArray, (short) 32);
+    }
+
+    private void signSchnorr(short counter, byte[] nonceBuffer, short nonceOffset, byte[] messageBuffer, short messageOffset) {
+        hasher.reset();
+        hasher.update(nonceBuffer, nonceOffset, curve.POINT_SIZE);
+        groupKey.getW(ramArray, (short) 0);
+        hasher.update(ramArray, (short) 0, curve.POINT_SIZE);
+        hasher.doFinal(messageBuffer, messageOffset, (short) 32, ramArray, (short) 0);
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
+        signature.mod_mult(tmpSecret, groupSecret, curve.rBN);
+        prf(counter);
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
+        signature.mod_add(tmpSecret, curve.rBN);
+    }
+
+    private void signBIP(short counter, byte[] nonceBuffer, short nonceOffset, byte[] messageBuffer, short messageOffset) {
+        hasher.reset();
+        hasher.update(Consts.TAG_CHALLENGE, (short) 0, (short) Consts.TAG_CHALLENGE.length);
+        hasher.update(Consts.TAG_CHALLENGE, (short) 0, (short) Consts.TAG_CHALLENGE.length);
+        hasher.update(nonceBuffer, (short) (nonceOffset + 1), curve.COORD_SIZE);
+        groupKey.getW(ramArray, (short) 0);
+        hasher.update(ramArray, (short) 1, curve.COORD_SIZE);
+        hasher.doFinal(messageBuffer, messageOffset, (short) 32, ramArray, (short) 0);
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
+        signature.mod_mult(tmpSecret, groupSecret, curve.rBN);
+        if (!groupKey.isYEven()) {
+            signature.mod_negate(curve.rBN);
+        }
+        prf(counter);
+        tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, hasher.getLength());
+        if ((messageBuffer[(short) (messageOffset - 1)] & (byte) 0x01) == 0) {
+            signature.mod_add(tmpSecret, curve.rBN);
+        } else {
+            signature.mod_sub(tmpSecret, curve.rBN);
+        }
     }
 }

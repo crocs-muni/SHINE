@@ -15,6 +15,10 @@ public class Consts {
     public static final byte INS_REVEAL_NONCE = (byte) 0x08;
     public static final byte INS_SIGN = (byte) 0x09;
     public static final byte INS_SIGN_REVEAL = (byte) 0x0a;
+    public static final byte INS_SIGN_BIP = (byte) 0x0b;
+    public static final byte INS_SIGN_BIP_REVEAL = (byte) 0x0c;
+
+    public static final byte[] TAG_CHALLENGE = {(byte) 0x7b, (byte) 0xb5, (byte) 0x2d, (byte) 0x7a, (byte) 0x9f, (byte) 0xef, (byte) 0x58, (byte) 0x32, (byte) 0x3e, (byte) 0xb1, (byte) 0xbf, (byte) 0x7a, (byte) 0x40, (byte) 0x7d, (byte) 0xb3, (byte) 0x82, (byte) 0xd2, (byte) 0xf3, (byte) 0xf2, (byte) 0xd8, (byte) 0x1b, (byte) 0xb1, (byte) 0x22, (byte) 0x4f, (byte) 0x49, (byte) 0xfe, (byte) 0x51, (byte) 0x8f, (byte) 0x6d, (byte) 0x48, (byte) 0xd3, (byte) 0x7c};
 
     static final short E_COMMITMENT_CHECK_FAILED = (short) 0xc100;
     static final short E_USED_NONCE = (short) 0xc101;

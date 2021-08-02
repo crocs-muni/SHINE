@@ -103,23 +103,23 @@ public class ProtocolManager {
         return resp.getData();
     }
 
-    public BigInteger sign(int counter, ECPoint groupNonce, byte[] message) throws Exception {
+    public BigInteger sign(int counter, ECPoint groupNonce, byte[] message, boolean bip) throws Exception {
         byte[] data = new byte[SecP256r1.POINT_SIZE + message.length];
         System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256r1.POINT_SIZE);
         System.arraycopy(message, 0, data, SecP256r1.POINT_SIZE, message.length);
 
-        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_SIGN, counter & 0xff, (counter >> 8) & 0xff, data);
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP : Consts.INS_SIGN, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
         checkLength(resp, 32);
         return new BigInteger(1, resp.getData());
     }
 
-    public BigInteger signReveal(int counter, ECPoint groupNonce, byte[] message, byte[] keyBuffer) throws Exception {
+    public BigInteger signReveal(int counter, ECPoint groupNonce, byte[] message, byte[] keyBuffer, boolean bip) throws Exception {
         byte[] data = new byte[SecP256r1.POINT_SIZE + message.length];
         System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256r1.POINT_SIZE);
         System.arraycopy(message, 0, data, SecP256r1.POINT_SIZE, message.length);
 
-        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_SIGN_REVEAL, counter & 0xff, (counter >> 8) & 0xff, data);
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP_REVEAL : Consts.INS_SIGN_REVEAL, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
         checkLength(resp, 32 + 64);
         byte[] signature = new byte[32];
