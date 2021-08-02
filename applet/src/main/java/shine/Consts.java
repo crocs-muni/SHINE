@@ -4,7 +4,9 @@ public class Consts {
     public static final byte MAX_PARTIES = 4;
 
     public static final byte CLA_SHINE = (byte) 0x00;
-    public static final byte INS_INFO = (byte) 0x00;
+    public static final byte INS_INFO = (byte) 0xF0;
+    public static final byte INS_IDENTITY = (byte) 0xF1;
+
     public static final byte INS_KEYGEN_INITIALIZE = (byte) 0x01;
     public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0x02;
     public static final byte INS_KEYGEN_REVEAL = (byte) 0x03;

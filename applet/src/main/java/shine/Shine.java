@@ -16,7 +16,7 @@ public class Shine extends Applet implements MultiSelectable
     public ECCurve curve;
 
     public Bignat identitySecret, tmpSecret, groupSecret, signature;
-    public ECPoint tmpKey, groupKey;
+    public ECPoint identityKey, tmpKey, groupKey;
 
     private short groupSize;
 
@@ -39,6 +39,7 @@ public class Shine extends Applet implements MultiSelectable
         curve = new ECCurve(false, SecP256r1.p, SecP256r1.a, SecP256r1.b, SecP256r1.G, SecP256r1.r);
 
         identitySecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
+        identityKey = new ECPoint(curve, ecc.ech);
 
         tmpSecret = new Bignat(curve.COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, ecc.bnh);
         tmpKey = new ECPoint(curve, ecc.ech);
@@ -52,6 +53,8 @@ public class Shine extends Applet implements MultiSelectable
 
         random.generateData(ramArray, (short) 0, (short) 32);
         identitySecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
+        identityKey.setW(curve.G, (short) 0, (short) curve.G.length);
+        identityKey.multiplication(identitySecret);
 
         register();
     }
@@ -69,6 +72,10 @@ public class Shine extends Applet implements MultiSelectable
                 case Consts.INS_INFO:
                     getInfo(apdu);
                     break;
+                case Consts.INS_IDENTITY:
+                    getIdentity(apdu);
+                    break;
+
                 case Consts.INS_KEYGEN_INITIALIZE:
                     keygenInitialize(apdu);
                     break;
@@ -84,6 +91,7 @@ public class Shine extends Applet implements MultiSelectable
                 case Consts.INS_KEYGEN_FINALIZE:
                     keygenFinalize(apdu);
                     break;
+
                 case Consts.INS_GET_NONCE:
                     getNonce(apdu);
                     break;
@@ -148,6 +156,12 @@ public class Shine extends Applet implements MultiSelectable
         byte[] msg = {(byte) 0x53, (byte) 0x48, (byte) 0x49, (byte) 0x4e, (byte) 0x45}; // SHINE
         Util.arrayCopyNonAtomic(msg, (short) 0, apduBuffer, (short) 0, (short) msg.length);
         apdu.setOutgoingAndSend((short) 0, (short) msg.length);
+    }
+
+    private void getIdentity(APDU apdu) {
+        byte[] apduBuffer = apdu.getBuffer();
+        identityKey.getW(apduBuffer, (short) 0);
+        apdu.setOutgoingAndSend((short) 0, curve.POINT_SIZE);
     }
 
     private void keygenInitialize(APDU apdu) {
