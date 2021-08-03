@@ -4,8 +4,12 @@ public class Consts {
     public static final byte MAX_PARTIES = 4;
 
     public static final byte CLA_SHINE = (byte) 0x00;
-    public static final byte INS_INFO = (byte) 0xF0;
-    public static final byte INS_IDENTITY = (byte) 0xF1;
+    public static final byte INS_INFO = (byte) 0xf0;
+    public static final byte INS_IDENTITY = (byte) 0xf1;
+
+    public static final byte INS_DEBUG_KEYGEN = (byte) 0xd0;
+    public static final byte INS_DEBUG_PRIVATE = (byte) 0xd1;
+    public static final byte INS_DEBUG_GROUPKEY = (byte) 0xd2;
 
     public static final byte INS_KEYGEN_INITIALIZE = (byte) 0x01;
     public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0x02;
@@ -26,6 +30,7 @@ public class Consts {
     static final short E_USED_NONCE = (short) 0xc101;
     static final short E_COMMITMENT_NUMBER = (short) 0xc102;
     static final short E_KEY_NUMBER = (short) 0xc103;
+    static final short E_DEBUG_DISABLED = (short) 0xc104;
 
     final static short SW_Exception = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;

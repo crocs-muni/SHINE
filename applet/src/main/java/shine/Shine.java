@@ -8,23 +8,24 @@ import shine.jcmathlib.*;
 
 public class Shine extends Applet implements MultiSelectable
 {
-    public byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
-    public RandomData random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-    public MessageDigest hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+    public final byte[] ramArray = JCSystem.makeTransientByteArray((short) 65, JCSystem.CLEAR_ON_DESELECT);
+    public final RandomData random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+    public final MessageDigest hasher = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
 
-    public ECConfig ecc;
-    public ECCurve curve;
+    public final ECConfig ecc;
+    public final ECCurve curve;
 
-    public Bignat identitySecret, tmpSecret, groupSecret, signature;
-    public ECPoint identityKey, tmpKey, groupKey;
+    public final Bignat identitySecret, tmpSecret, groupSecret, signature;
+    public final ECPoint identityKey, tmpKey, groupKey;
 
     private short groupSize;
 
-    private byte[] commitments;
+    private final byte[] commitments;
     private byte commitmentCounter = 0;
     private byte revealCounter = 0;
     private short nonceCounter = 0;
 
+    private final boolean debug = true;
 
     public static void install(byte[] bArray, short bOffset, byte bLength)
     {
@@ -112,6 +113,16 @@ public class Shine extends Applet implements MultiSelectable
                     break;
                 case Consts.INS_SIGN_BIP_REVEAL:
                     sign(apdu, true, true);
+                    break;
+
+                case Consts.INS_DEBUG_KEYGEN:
+                    debugKeygen(apdu);
+                    break;
+                case Consts.INS_DEBUG_PRIVATE:
+                    debugPrivate(apdu);
+                    break;
+                case Consts.INS_DEBUG_GROUPKEY:
+                    debugGroupKey(apdu);
                     break;
 
                 default:
@@ -341,5 +352,39 @@ public class Shine extends Applet implements MultiSelectable
         } else {
             signature.mod_sub(tmpSecret, curve.rBN);
         }
+    }
+
+    private void debugKeygen(APDU apdu) {
+        if (!debug)
+            ISOException.throwIt(Consts.E_DEBUG_DISABLED);
+
+        byte[] apduBuffer = apdu.getBuffer();
+        groupSize = apduBuffer[ISO7816.OFFSET_P1];
+        revealCounter = commitmentCounter = (byte) groupSize;
+        nonceCounter = 0;
+        random.generateData(ramArray, (short) 0, (short) 32);
+        groupSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
+        groupKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
+        groupKey.multiplication(groupSecret);
+        groupKey.getW(apduBuffer, (short) 0);
+        apdu.setOutgoingAndSend((short) 0, curve.POINT_SIZE);
+    }
+
+    private void debugPrivate(APDU apdu) {
+        if (!debug)
+            ISOException.throwIt(Consts.E_DEBUG_DISABLED);
+
+        byte[] apduBuffer = apdu.getBuffer();
+        groupSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) 32);
+        groupSecret.copy_to_buffer(apduBuffer, (short) 0);
+        apdu.setOutgoingAndSend((short) 0, groupSecret.length());
+    }
+
+    private void debugGroupKey(APDU apdu) {
+        if (!debug)
+            ISOException.throwIt(Consts.E_DEBUG_DISABLED);
+
+        groupKey.setW(apdu.getBuffer(), ISO7816.OFFSET_CDATA, curve.POINT_SIZE);
+        apdu.setOutgoing();
     }
 }
