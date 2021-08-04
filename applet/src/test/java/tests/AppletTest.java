@@ -161,4 +161,20 @@ public class AppletTest extends BaseTest {
         challenge = computeChallengeBIP(nonce, groupKey, message);
         Assert.assertEquals(pm.generator.multiply(signature), adjustedKey.multiply(challenge).add(adjustedNonce));
     }
+
+    @Test
+    public void testDebug() throws Exception {
+        ECPoint publicKey = pm.debugKeygen();
+        BigInteger privateKey = pm.debugPrivate();
+        Assert.assertEquals(publicKey, pm.generator.multiply(privateKey));
+        pm.debugSetGroupKey(publicKey);
+        Assert.assertEquals(publicKey, pm.debugGroupKey());
+
+
+        ECPoint nonce = pm.getNonce(0);
+        byte[] message = new byte[32];
+        BigInteger signature = pm.sign(0, nonce, message, false);
+        BigInteger challenge = computeChallenge(nonce, publicKey, message);
+        Assert.assertEquals(pm.generator.multiply(signature), publicKey.multiply(challenge).add(nonce));
+    }
 }

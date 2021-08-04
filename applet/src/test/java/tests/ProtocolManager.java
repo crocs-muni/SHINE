@@ -128,6 +128,33 @@ public class ProtocolManager {
         return new BigInteger(1, signature);
     }
 
+    public ECPoint debugKeygen() throws Exception {
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_KEYGEN, 0, 0);
+        lastOperationTime = cm.getLastTransmitTime();
+        checkLength(resp, 65);
+        return curve.decodePoint(resp.getData());
+    }
+
+    public BigInteger debugPrivate() throws Exception {
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_PRIVATE, 0, 0);
+        lastOperationTime = cm.getLastTransmitTime();
+        checkLength(resp, 32);
+        return new BigInteger(1, resp.getData());
+    }
+
+    public ECPoint debugGroupKey() throws Exception {
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_GROUPKEY, 0, 0);
+        lastOperationTime = cm.getLastTransmitTime();
+        checkLength(resp, 65);
+        return curve.decodePoint(resp.getData());
+    }
+
+    public void debugSetGroupKey(ECPoint groupKey) throws Exception {
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_SET_GROUPKEY, 0, 0, groupKey.getEncoded(false));
+        lastOperationTime = cm.getLastTransmitTime();
+        checkLength(resp, 0);
+    }
+
     public void disconnect() throws CardException {
         cm.disconnect(true);
         cm = null;

@@ -124,6 +124,9 @@ public class Shine extends Applet implements MultiSelectable
                 case Consts.INS_DEBUG_GROUPKEY:
                     debugGroupKey(apdu);
                     break;
+                case Consts.INS_DEBUG_SET_GROUPKEY:
+                    debugSetGroupKey(apdu);
+                    break;
 
                 default:
                     ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
@@ -381,6 +384,14 @@ public class Shine extends Applet implements MultiSelectable
     }
 
     private void debugGroupKey(APDU apdu) {
+        if (!debug)
+            ISOException.throwIt(Consts.E_DEBUG_DISABLED);
+
+        groupKey.getW(apdu.getBuffer(), (short) 0);
+        apdu.setOutgoingAndSend((short) 0, curve.POINT_SIZE);
+    }
+
+    private void debugSetGroupKey(APDU apdu) {
         if (!debug)
             ISOException.throwIt(Consts.E_DEBUG_DISABLED);
 

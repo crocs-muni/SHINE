@@ -10,6 +10,7 @@ public class Consts {
     public static final byte INS_DEBUG_KEYGEN = (byte) 0xd0;
     public static final byte INS_DEBUG_PRIVATE = (byte) 0xd1;
     public static final byte INS_DEBUG_GROUPKEY = (byte) 0xd2;
+    public static final byte INS_DEBUG_SET_GROUPKEY = (byte) 0xd3;
 
     public static final byte INS_KEYGEN_INITIALIZE = (byte) 0x01;
     public static final byte INS_KEYGEN_ADD_COMMITMENT = (byte) 0x02;
