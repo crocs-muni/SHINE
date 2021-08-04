@@ -4,6 +4,7 @@ import cz.muni.fi.crocs.rcard.client.CardManager;
 import cz.muni.fi.crocs.rcard.client.CardType;
 import org.bouncycastle.math.ec.ECPoint;
 import org.junit.jupiter.api.Test;
+import org.testng.Assert;
 
 import java.io.FileWriter;
 import java.io.PrintWriter;
@@ -13,7 +14,7 @@ public class PerformanceTest extends BaseTest {
     ProtocolManager pm;
     PrintWriter file;
 
-    long REPEAT = 1000;
+    long REPEAT = 100;
 
     @Test
     public void PerformanceMeasurement() throws Exception {
@@ -25,8 +26,9 @@ public class PerformanceTest extends BaseTest {
         pm = new ProtocolManager(connect());
         file = new PrintWriter(new FileWriter("measurement.csv", true));
 
+        debugInitialize();
         for(int i = 0; i < REPEAT; ++i) {
-            measureKeygen(1);
+            //measureKeygen(1);
             measureSign(2 * i);
         }
 
@@ -49,6 +51,10 @@ public class PerformanceTest extends BaseTest {
         }
         ECPoint groupkey = pm.keygenFinalize();
         file.printf("KeygenFinalize;%d;%d\n", groupSize, pm.getLastOperationTime());
+    }
+
+    public void debugInitialize() throws Exception {
+        pm.debugSetGroupKey(pm.debugKeygen(), 1);
     }
 
     public void measureSign(int counter) throws Exception {

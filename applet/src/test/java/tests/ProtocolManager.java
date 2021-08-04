@@ -149,8 +149,8 @@ public class ProtocolManager {
         return curve.decodePoint(resp.getData());
     }
 
-    public void debugSetGroupKey(ECPoint groupKey) throws Exception {
-        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_SET_GROUPKEY, 0, 0, groupKey.getEncoded(false));
+    public void debugSetGroupKey(ECPoint groupKey, int groupSize) throws Exception {
+        ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_DEBUG_SET_GROUPKEY, groupSize, 0, groupKey.getEncoded(false));
         lastOperationTime = cm.getLastTransmitTime();
         checkLength(resp, 0);
     }

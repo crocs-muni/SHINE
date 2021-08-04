@@ -167,7 +167,7 @@ public class AppletTest extends BaseTest {
         ECPoint publicKey = pm.debugKeygen();
         BigInteger privateKey = pm.debugPrivate();
         Assert.assertEquals(publicKey, pm.generator.multiply(privateKey));
-        pm.debugSetGroupKey(publicKey);
+        pm.debugSetGroupKey(publicKey, 1);
         Assert.assertEquals(publicKey, pm.debugGroupKey());
 
 
