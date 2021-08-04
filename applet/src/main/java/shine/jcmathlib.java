@@ -2873,10 +2873,8 @@ public class jcmathlib {
          * enough for the result it is asserted that the size of this is greater
          * than or equal to the sum of the sizes of {@code x} and {@code y}.
          *
-         * @param x
-         *            first factor
-         * @param y
-         *            second factor
+         * @param x first factor
+         * @param y second factor
          */
         public void mult(Bignat x, Bignat y) {
             if (!OperationSupport.getInstance().RSA_MULT_TRICK || !bnh.FLAG_FAST_MULT_VIA_RSA || x.length() < Bignat_Helper.FAST_MULT_VIA_RSA_TRESHOLD_LENGTH) {
@@ -3128,11 +3126,23 @@ public class jcmathlib {
 
 
         /**
-         * Computes square root of provided Bignat which MUST be prime using Tonelli
+         * Computes square root of this modulo provided prime
+         * @param p prime
+         */
+        public void sqrt_FP(Bignat p) {
+            if(p.value[(short) (p.length() - 1)] % 4 == 3) {
+                fastSqrtFP(p);
+            } else {
+                slowSqrtFP(p);
+            }
+        }
+
+        /**
+         * Computes square root of this modulo provided prime which MUST be prime using Tonelli
          * Shanks Algorithm. The result (one of the two roots) is stored to this.
          * @param p value to compute square root from
          */
-        public void sqrt_FP(Bignat p) {
+        private void slowSqrtFP(Bignat p) {
             // 1. Find Q and S such that p - 1 = Q * 2^S and Q is odd
             bnh.fnc_sqrt_p_1.lock();
             bnh.fnc_sqrt_p_1.clone(p);
@@ -3230,7 +3240,7 @@ public class jcmathlib {
                     bnh.fnc_sqrt_tmp.shift_left();
                     bnh.fnc_sqrt_S.decrement_one();
                 }
-                bnh.fnc_sqrt_b.mod_exp(bnh.fnc_sqrt_tmp, p); // this is computed wrong
+                bnh.fnc_sqrt_b.mod_exp(bnh.fnc_sqrt_tmp, p);
                 bnh.fnc_sqrt_tmp.unlock();
                 bnh.fnc_sqrt_S.copy(bnh.fnc_sqrt_i);
                 bnh.fnc_sqrt_i.unlock();
@@ -3251,6 +3261,22 @@ public class jcmathlib {
             bnh.fnc_sqrt_z.unlock();
             bnh.fnc_sqrt_S.unlock();
             bnh.fnc_sqrt_t.unlock();
+        }
+
+        /**
+         * Computes $a^{(p + 1)/4} (mod p)$ which is a modular square root when p % 4 == 3.
+         * @param p prime assumed to be congruent to 3 (mod 4)
+         */
+        private void fastSqrtFP(Bignat p) {
+            Bignat exp = bnh.rm.helper_BN_D;
+            exp.lock();
+            exp.clone(p);
+            exp.increment_one();
+
+            exp.divide_by_2();
+            exp.divide_by_2();
+            this.mod_exp(exp, p);
+            exp.unlock();
         }
 
 
@@ -4248,6 +4274,7 @@ public class jcmathlib {
                     PRECISE_CURVE_BITLENGTH = false;
                     break;
                 case J3H145:
+                    RSA_MULT_TRICK = true;
                     PRECISE_CURVE_BITLENGTH = false;
                     RSA_MOD_EXP = false;
                     ECDH_XY = true;
