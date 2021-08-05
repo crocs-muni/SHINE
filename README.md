@@ -14,17 +14,29 @@ To build the applet, clone this repository with submodules and run:
 
 The resulting cap file can be found in `applet/build/javacard/shine.cap`
 
+## Correctness Tests
+
+Correctness tests can be started using the following command:
+
+```
+./gradlew test --tests tests.AppletTest
+```
+
+*Important* If you want to use a physical card, install the applet to the smartcard and change card type to `PHYSICAL` in `AppletTest.java` file, before running the command.
+
 ## Performance Measurement
 
-Tests and performance measurementment can be performed by running:
+Performance measurementment can be performed with the following command:
 
 ```
-./gradlew test
+./gradlew test --tests tests.PerformanceTest
 ```
 
-If you want to use a physical card, install the applet to the smartcard and change card type to `PHYSICAL` in `PerformaceTest.java` file, before running the command.
+*Important* If you want to use a physical card, install the applet to the smartcard and change card type to `PHYSICAL` in `PerformaceTest.java` file, before running the command.
 
 ## APDU
+
+SHINE applet responds to the following APDUs.
 
 | Name                    | CLA   | INS   | P1           | P2         | Data                                    |
 | :---                    | :---: | :---: | :---:        | :---:      | :---                                    |
@@ -42,3 +54,7 @@ If you want to use a physical card, install the applet to the smartcard and chan
 | `SIGN_REVEAL`           | 0x00  | 0x0A  | `CTR_LOW`    | `CTR_HIGH` | 65B aggregate nonce + 32B message       |
 | `SIGN_BIP`              | 0x00  | 0x0B  | `CTR_LOW`    | `CTR_HIGH` | 65B aggregate nonce + 32B message       |
 | `SIGN_BIP_REVEAL`       | 0x00  | 0x0C  | `CTR_LOW`    | `CTR_HIGH` | 65B aggregate nonce + 32B message       |
+| `DEBUG_KEYGEN`          | 0x00  | 0xD0  | `GROUP_SIZE` | 0x00       | ---                                     |
+| `DEBUG_PRIVATE`         | 0x00  | 0xD1  | 0x00         | 0x00       |                                         |
+| `DEBUG_GROUPKEY`        | 0x00  | 0xD2  | 0x00         | 0x00       |                                         |
+| `DEBUG_SET_GROUPKEY`    | 0x00  | 0xD3  | 0x00         | 0x00       | 65B group key                           |
