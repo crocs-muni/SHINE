@@ -28,6 +28,7 @@ public class AppletTest extends BaseTest {
     @BeforeEach
     public void setUpMethod() throws Exception {
         pm = new ProtocolManager(connect());
+        pm.initialize();
     }
 
     @AfterEach

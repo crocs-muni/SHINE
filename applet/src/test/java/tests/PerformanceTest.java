@@ -1,10 +1,8 @@
 package tests;
 
-import cz.muni.fi.crocs.rcard.client.CardManager;
 import cz.muni.fi.crocs.rcard.client.CardType;
 import org.bouncycastle.math.ec.ECPoint;
 import org.junit.jupiter.api.Test;
-import org.testng.Assert;
 
 import java.io.FileWriter;
 import java.io.PrintWriter;
@@ -26,6 +24,7 @@ public class PerformanceTest extends BaseTest {
         pm = new ProtocolManager(connect());
         file = new PrintWriter(new FileWriter("measurement.csv", true));
 
+        pm.initialize();
         debugInitialize();
         for(int i = 0; i < REPEAT; ++i) {
             //measureKeygen(1);

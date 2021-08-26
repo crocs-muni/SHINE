@@ -14,6 +14,10 @@ To build the applet, clone this repository with submodules and run:
 
 The resulting cap file can be found in `applet/build/javacard/shine.cap`
 
+### Installation on a Physical Smartcard
+
+After installation, the applet needs to be initialized.
+
 ## Correctness Tests
 
 Correctness tests can be started using the following command:
@@ -42,6 +46,7 @@ SHINE applet responds to the following APDUs.
 | :---                    | :---: | :---: | :---:        | :---:      | :---                                    |
 | `INFO`                  | 0x00  | 0xF0  | 0x00         | 0x00       | ---                                     |
 | `IDENTITY`              | 0x00  | 0xF1  | 0x00         | 0x00       | ---                                     |
+| `INITIALIZE`            | 0x00  | 0xF2  | 0x00         | 0x00       | ---                                     |
 | `KEYGEN_INITIALIZE`     | 0x00  | 0x01  | `GROUP_SIZE` | 0x00       | ---                                     |
 | `KEYGEN_ADD_COMMITMENT` | 0x00  | 0x02  | `IDX`        | 0x00       | 32B SHA256 of public key of `IDX` party |
 | `KEYGEN_REVEAL`         | 0x00  | 0x03  | 0x00         | 0x00       | ---                                     |

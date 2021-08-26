@@ -49,6 +49,11 @@ public class ProtocolManager {
         Assertions.assertEquals(apdu.getData().length, length);
     }
 
+    public void initialize() throws Exception {
+        sendAPDU(Consts.CLA_SHINE, Consts.INS_INITIALIZE, 0, 0);
+        lastOperationTime = cm.getLastTransmitTime();
+    }
+
     public byte[] keygenInitialize(int groupSize) throws Exception {
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_KEYGEN_INITIALIZE, groupSize, 0);
         lastOperationTime = cm.getLastTransmitTime();

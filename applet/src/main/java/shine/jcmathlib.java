@@ -118,21 +118,6 @@ public class jcmathlib {
         public static final short SW_ECPOINT_UNEXPECTED_KA_LEN      = (short) 0x700b;
         public static final short SW_ALLOCATOR_INVALIDOBJID         = (short) 0x700c;
         public static final short SW_OPERATION_NOT_SUPPORTED        = (short) 0x700d;
-
-
-        // Specific codes to propagate exceptions cought
-        // lower byte of exception is value as defined in JCSDK/api_classic/constant-values.htm
-        public final static short SW_Exception                      = (short) 0xff01;
-        public final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;
-        public final static short SW_ArithmeticException            = (short) 0xff03;
-        public final static short SW_ArrayStoreException            = (short) 0xff04;
-        public final static short SW_NullPointerException           = (short) 0xff05;
-        public final static short SW_NegativeArraySizeException     = (short) 0xff06;
-        public final static short SW_CryptoException_prefix         = (short) 0xf100;
-        public final static short SW_SystemException_prefix         = (short) 0xf200;
-        public final static short SW_PINException_prefix            = (short) 0xf300;
-        public final static short SW_TransactionException_prefix    = (short) 0xf400;
-        public final static short SW_CardRuntimeException_prefix    = (short) 0xf500;
     }
 
 
@@ -809,7 +794,6 @@ public class jcmathlib {
          * @param b_arr array with b
          * @param G_arr array with base point G
          * @param r_arr array with r
-         * @param k short with k
          */
         public ECCurve(boolean bCopyArgs, byte[] p_arr, byte[] a_arr, byte[] b_arr, byte[] G_arr, byte[] r_arr) {
             short bitlength = (short) (p_arr.length * 8);
@@ -817,8 +801,8 @@ public class jcmathlib {
                 for (short i = 0; i < p_arr.length; ++i) {
                     bitlength -= 8;
                     if (p_arr[i] != (byte) 0x00) {
-                        byte b = p_arr[i];
-                        while (b != (byte) 0x00) {
+                        short b = (short) (p_arr[i] & 0xff);
+                        while (b != (short) 0x00) {
                             b >>= (short) 1;
                             ++bitlength;
                         }
@@ -896,12 +880,14 @@ public class jcmathlib {
             privKey.setB(b, (short) 0, (short) b.length);
             privKey.setG(G, (short) 0, (short) G.length);
             privKey.setR(r, (short) 0, (short) r.length);
+            privKey.setK((short) 1);
 
             pubKey.setFieldFP(p, (short) 0, (short) p.length);
             pubKey.setA(a, (short) 0, (short) a.length);
             pubKey.setB(b, (short) 0, (short) b.length);
             pubKey.setG(G, (short) 0, (short) G.length);
             pubKey.setR(r, (short) 0, (short) r.length);
+            pubKey.setK((short) 1);
 
             privKey.setS(Bignat_Helper.CONST_ONE, (short) 0, (short) 1);
             pubKey.setW(G, (short) 0, (short) G.length);
@@ -4243,6 +4229,7 @@ public class jcmathlib {
         public static final short SIMULATOR = (short) 0x0000;
         public static final short J2E145G = 0x0001;
         public static final short J3H145 = 0x0002;
+        public static final short J3R180 = 0x0003;
 
         public boolean PRECISE_CURVE_BITLENGTH = true;
         public boolean RSA_MULT_TRICK = false;
@@ -4271,39 +4258,19 @@ public class jcmathlib {
                     break;
                 case J2E145G:
                     RSA_MULT_TRICK = true;
-                    PRECISE_CURVE_BITLENGTH = false;
                     break;
                 case J3H145:
                     RSA_MULT_TRICK = true;
-                    PRECISE_CURVE_BITLENGTH = false;
+                    RSA_MOD_EXP = false;
+                    ECDH_XY = true;
+                    break;
+                case J3R180:
+                    RSA_MULT_TRICK = true;
                     RSA_MOD_EXP = false;
                     ECDH_XY = true;
                     break;
                 default:
                     break;
-            }
-        }
-
-        public void setAutomatically() {
-            ECDH_XY = testECDHXY();
-            ECDH_X_ONLY = testECDHX();
-        }
-
-        private boolean testECDHXY() {
-            try {
-                KeyAgreement.getInstance(jcmathlib.ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN_XY, false);
-                return true;
-            } catch (Exception e) {
-                return false;
-            }
-        }
-
-        private boolean testECDHX() {
-            try {
-                KeyAgreement.getInstance(jcmathlib.ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN, false);
-                return true;
-            } catch (Exception e) {
-                return false;
             }
         }
     }
