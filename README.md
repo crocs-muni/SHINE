@@ -12,11 +12,14 @@ To build the applet, clone this repository with submodules and run:
 ./gradlew buildJavaCard
 ```
 
-The resulting cap file can be found in `applet/build/javacard/shine.cap`
+The resulting cap file can be found in `applet/build/javacard/shine.cap`.
+
+Optionally, before the compilation, a specific smartcard type can be set in the
+Shine constructor `(Shine.java:38)` to use optimized operations.
 
 ### Installation on a Physical Smartcard
 
-After installation, the applet needs to be initialized.
+After installation, the applet needs to be initialized. This can be achieved by sending `00F2000000` APDU to the card or by running correctness tests.
 
 ## Correctness Tests
 
