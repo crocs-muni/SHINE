@@ -276,6 +276,7 @@ public class Shine extends Applet implements MultiSelectable
 
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
+        checkCounter(counter);
         if(counter < nonceCounter) {
             ISOException.throwIt(Consts.E_USED_NONCE);
         }
@@ -294,6 +295,7 @@ public class Shine extends Applet implements MultiSelectable
 
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
+        checkCounter(counter);
         prf(counter);
         tmpSecret.set_from_byte_array((short) 0, ramArray, (short) 0, (short) (curve.KEY_LENGTH / 8));
         tmpKey.setW(curve.G, (short) 0, curve.POINT_SIZE);
@@ -312,6 +314,7 @@ public class Shine extends Applet implements MultiSelectable
 
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
+        checkCounter(counter);
         if(counter < nonceCounter) {
             ISOException.throwIt(Consts.E_USED_NONCE);
         }
@@ -328,6 +331,7 @@ public class Shine extends Applet implements MultiSelectable
 
         byte[] apduBuffer = apdu.getBuffer();
         short counter = (short) (((short) apduBuffer[ISO7816.OFFSET_P1] & 0xff) | (((short) apduBuffer[ISO7816.OFFSET_P2] & 0xff) << 8));
+        checkCounter(counter);
         if(counter < nonceCounter) {
             ISOException.throwIt(Consts.E_USED_NONCE);
         }
@@ -447,5 +451,14 @@ public class Shine extends Applet implements MultiSelectable
 
         groupKey.setW(apdu.getBuffer(), ISO7816.OFFSET_CDATA, curve.POINT_SIZE);
         apdu.setOutgoing();
+    }
+
+    private void checkCounter(short counter) {
+        if(counter < 0) {
+            ISOException.throwIt(Consts.E_INVALID_COUNTER);
+        }
+        if(counter >= 32766) {
+            ISOException.throwIt(Consts.E_DEPLETED_COUNTER);
+        }
     }
 }

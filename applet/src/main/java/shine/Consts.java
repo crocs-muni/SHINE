@@ -35,6 +35,8 @@ public class Consts {
     static final short E_DEBUG_DISABLED = (short) 0xc104;
     static final short E_ALREADY_INITIALIZED = (short) 0xc105;
     static final short E_UNINITIALIZED = (short) 0xc106;
+    static final short E_INVALID_COUNTER = (short) 0xc107;
+    static final short E_DEPLETED_COUNTER = (short) 0xc108;
 
     final static short SW_Exception = (short) 0xff01;
     final static short SW_ArrayIndexOutOfBoundsException = (short) 0xff02;
