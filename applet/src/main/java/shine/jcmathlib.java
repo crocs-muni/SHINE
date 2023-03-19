@@ -1,156 +1,55 @@
-// Merged file class by JavaPresso (https://github.com/petrs/JavaPresso)
+// Compressed JCMathLib (https://github.com/OpenCryptoProject/JCMathLib)
 
 package shine;
 
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
-import javacard.security.CryptoException;
-import javacard.security.ECPrivateKey;
-import javacard.security.ECPublicKey;
-import javacard.security.KeyAgreement;
-import javacard.security.KeyBuilder;
-import javacard.security.KeyPair;
-import javacard.security.MessageDigest;
-import javacard.security.RSAPublicKey;
-import javacard.security.Signature;
+import javacard.security.*;
 import javacardx.crypto.Cipher;
 
 public class jcmathlib {
-    /**
-     *
-     * @author Petr Svenda
-     */
-    static class ECPoint_Helper extends Base_Helper {
-        // Selected constants missing from older JC API specs
-        public static final byte ALG_EC_SVDP_DH_PLAIN = (byte) 3;
-        public static final byte ALG_EC_SVDP_DH_PLAIN_XY = (byte) 6;
-        public static final byte ALG_ECDSA_SHA_256 = (byte) 33;
-
-        byte[] uncompressed_point_arr1;
-        byte[] uncompressed_point_arr2;
-        byte[] fnc_isEqual_hashArray;
-        byte[] fnc_multiplication_resultArray;
-
-        // These Bignats are just pointing to some helperEC_BN_? so reasonable naming is preserved yet no need to actually allocated whole Bignat object
-        Bignat fnc_add_x_r; // frequent write
-        Bignat fnc_add_y_r; // frequent write
-        Bignat fnc_add_x_p; // one init, then just read
-        Bignat fnc_add_y_p; // one init, then just read
-        Bignat fnc_add_x_q; // one init, then just read
-        Bignat fnc_add_lambda; // write mod_mul (but only final result)
-        Bignat fnc_add_nominator; // frequent write
-        Bignat fnc_add_denominator; // frequent write
-
-        Bignat fnc_multiplication_x; // result write
-        Bignat fnc_multiplication_y_sq; // frequent write
-        Bignat fnc_multiplication_scalar; // write once, read
-        Bignat fnc_multiplication_y1; // mostly just read, write inside sqrt_FP
-        Bignat fnc_multiplication_y2; // mostly just read, result write
-        Bignat fnc_negate_yBN; // mostly just read, result write
-
-        KeyAgreement multKA;
-        Signature    fnc_SignVerifyECDSA_signEngine;
-        MessageDigest fnc_isEqual_hashEngine;
-
-        public ECPoint_Helper(ResourceManager rm) {
-            super(rm);
-
-            if(OperationSupport.getInstance().ECDH_XY) {
-                multKA = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN_XY, false);
-            } else if(OperationSupport.getInstance().ECDH_X_ONLY) {
-                multKA = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN, false);
-            }
-            fnc_SignVerifyECDSA_signEngine = Signature.getInstance(ALG_ECDSA_SHA_256, false);
-        }
-
-        void initialize() {
-            // Important: assignment of helper BNs is made according to two criteria:
-            // 1. Correctness: same BN must not be assigned to overlapping operations (guarded by lock/unlock)
-            // 2. Memory tradeoff: we like to put as few BNs into RAM as possible. So most frequently used BNs for write should be in RAM
-            //                      and at the same time we like to have as few BNs in RAM as possible.
-            // So think twice before changing the assignments!
-            fnc_add_x_r = rm.helperEC_BN_B;
-            fnc_add_y_r = rm.helperEC_BN_C;
-            fnc_add_x_p = rm.helperEC_BN_D;
-            fnc_add_y_p = rm.helperEC_BN_E;
-            fnc_add_x_q = rm.helperEC_BN_F;
-            fnc_add_nominator = rm.helperEC_BN_B;
-            fnc_add_denominator = rm.helperEC_BN_C;
-            fnc_add_lambda = rm.helperEC_BN_A;
-
-            fnc_multiplication_scalar = rm.helperEC_BN_F;
-            fnc_multiplication_x = rm.helperEC_BN_B;
-            fnc_multiplication_y_sq = rm.helperEC_BN_C;
-            fnc_multiplication_y1 = rm.helperEC_BN_D;
-            fnc_multiplication_y2 = rm.helperEC_BN_B;
-            fnc_multiplication_resultArray = rm.helper_BN_array1;
-
-            fnc_negate_yBN = rm.helperEC_BN_C;
-
-            fnc_isEqual_hashArray = rm.helper_hashArray;
-            fnc_isEqual_hashEngine = rm.hashEngine;
-
-            uncompressed_point_arr1 = rm.helper_uncompressed_point_arr1;
-            uncompressed_point_arr2 = rm.helper_uncompressed_point_arr2;
-
-        }
-
-    }
-
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class ReturnCodes {
-        // Custom error response codes
+    public static class ReturnCodes {
         public static final short SW_BIGNAT_RESIZETOLONGER          = (short) 0x7000;
         public static final short SW_BIGNAT_REALLOCATIONNOTALLOWED  = (short) 0x7001;
         public static final short SW_BIGNAT_MODULOTOOLARGE          = (short) 0x7002;
         public static final short SW_BIGNAT_INVALIDCOPYOTHER        = (short) 0x7003;
         public static final short SW_BIGNAT_INVALIDRESIZE           = (short) 0x7004;
-        public static final short SW_LOCK_ALREADYLOCKED             = (short) 0x7005;
-        public static final short SW_LOCK_NOTLOCKED                 = (short) 0x7006;
-        public static final short SW_LOCK_OBJECT_NOT_FOUND          = (short) 0x7007;
-        public static final short SW_LOCK_NOFREESLOT                = (short) 0x7008;
-        public static final short SW_LOCK_OBJECT_MISMATCH           = (short) 0x7009;
         public static final short SW_ECPOINT_INVALIDLENGTH          = (short) 0x700a;
         public static final short SW_ECPOINT_UNEXPECTED_KA_LEN      = (short) 0x700b;
         public static final short SW_ALLOCATOR_INVALIDOBJID         = (short) 0x700c;
         public static final short SW_OPERATION_NOT_SUPPORTED        = (short) 0x700d;
+        public static final short SW_ECPOINT_INVALID                = (short) 0x700f;
     }
 
 
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class ECPoint {
-        private final ECPoint_Helper ech;
+    public static class ECPoint {
+        private final ResourceManager rm;
 
-        private ECPublicKey         thePoint;
-        private KeyPair             thePointKeyPair;
-        private final ECCurve       theCurve;
+        private ECPublicKey point;
+        private KeyPair pointKeyPair;
+        private final ECCurve curve;
 
         /**
          * Creates new ECPoint object for provided {@code curve}. Random initial point value is generated.
          * The point will use helper structures from provided ECPoint_Helper object.
+         *
          * @param curve point's elliptic curve
-         * @param ech object with preallocated helper objects and memory arrays
+         * @param rm resource manager with prealocated objects and memory arrays
          */
-        public ECPoint(ECCurve curve, ECPoint_Helper ech) {
-            this.theCurve = curve;
-            this.ech = ech;
+        public ECPoint(ECCurve curve, ResourceManager rm) {
+            this.curve = curve;
+            this.rm = rm;
             updatePointObjects();
         }
 
         /**
          * Returns length of this point in bytes.
          *
-         * @return
+         * @return length of this point in bytes
          */
         public short length() {
-            return (short) (thePoint.getSize() / 8);
+            return (short) (point.getSize() / 8);
         }
 
         /**
@@ -158,79 +57,58 @@ public class jcmathlib {
          * New random point value is generated.
          */
         public final void updatePointObjects() {
-            this.thePointKeyPair = this.theCurve.newKeyPair(this.thePointKeyPair);
-            this.thePoint = (ECPublicKey) thePointKeyPair.getPublic();
+            pointKeyPair = curve.newKeyPair(pointKeyPair);
+            point = (ECPublicKey) pointKeyPair.getPublic();
         }
 
         /**
          * Copy value of provided point into this. This and other point must have
          * curve with same parameters, only length is checked.
+         *
          * @param other point to be copied
          */
         public void copy(ECPoint other) {
-            if (this.length() != other.length()) {
+            if (length() != other.length()) {
                 ISOException.throwIt(ReturnCodes.SW_ECPOINT_INVALIDLENGTH);
             }
-            ech.lock(ech.uncompressed_point_arr1);
-            short len = other.getW(ech.uncompressed_point_arr1, (short) 0);
-            this.setW(ech.uncompressed_point_arr1, (short) 0, len);
-            ech.unlock(ech.uncompressed_point_arr1);
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+
+            short len = other.getW(pointBuffer, (short) 0);
+            setW(pointBuffer, (short) 0, len);
         }
 
         /**
          * Set this point value (parameter W) from array with value encoded as per ANSI X9.62.
          * The uncompressed form is always supported. If underlying native JavaCard implementation
-         * of {@code ECPublickKey} supports compressed points, then this method accepts also compressed points.
+         * of {@code ECPublicKey} supports compressed points, then this method accepts also compressed points.
+         *
          * @param buffer array with serialized point
          * @param offset start offset within input array
          * @param length length of point
          */
         public void setW(byte[] buffer, short offset, short length) {
-            this.thePoint.setW(buffer, offset, length);
+            point.setW(buffer, offset, length);
         }
 
         /**
          * Returns current value of this point.
-         * @param buffer    memory array where to store serailized point value
-         * @param offset    start offset for output serialized point
+         *
+         * @param buffer memory array where to store serailized point value
+         * @param offset start offset for output serialized point
          * @return length of serialized point (number of bytes)
          */
         public short getW(byte[] buffer, short offset) {
-            return thePoint.getW(buffer, offset);
+            return point.getW(buffer, offset);
         }
 
         /**
          * Returns this point value as ECPublicKey object. No copy of point is made
          * before return, so change of returned object will also change this point value.
+         *
          * @return point as ECPublicKey object
          */
         public ECPublicKey asPublicKey() {
-            return this.thePoint;
-        }
-
-        /**
-         * Returns curve associated with this point. No copy of curve is made
-         * before return, so change of returned object will also change curve for
-         * this point.
-         *
-         * @return curve as ECCurve object
-         */
-        public ECCurve getCurve() {
-            return theCurve;
-        }
-
-        /**
-         * Returns the X coordinate of this point in uncompressed form.
-         * @param buffer output array for X coordinate
-         * @param offset start offset within output array
-         * @return length of X coordinate (in bytes)
-         */
-        public short getX(byte[] buffer, short offset) {
-            ech.lock(ech.uncompressed_point_arr1);
-            thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            Util.arrayCopyNonAtomic(ech.uncompressed_point_arr1, (short) 1, buffer, offset, this.theCurve.COORD_SIZE);
-            ech.unlock(ech.uncompressed_point_arr1);
-            return this.theCurve.COORD_SIZE;
+            return point;
         }
 
         /**
@@ -241,283 +119,364 @@ public class jcmathlib {
          * @return length of Y coordinate (in bytes)
          */
         public short getY(byte[] buffer, short offset) {
-            ech.lock(ech.uncompressed_point_arr1);
-            thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            Util.arrayCopyNonAtomic(ech.uncompressed_point_arr1, (short)(1 + this.theCurve.COORD_SIZE), buffer, offset, this.theCurve.COORD_SIZE);
-            ech.unlock(ech.uncompressed_point_arr1);
-            return this.theCurve.COORD_SIZE;
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+
+            point.getW(pointBuffer, (short) 0);
+            Util.arrayCopyNonAtomic(pointBuffer, (short) (1 + curve.COORD_SIZE), buffer, offset, curve.COORD_SIZE);
+            return curve.COORD_SIZE;
         }
 
         /**
-         * Returns the Y coordinate of this point in form of Bignat object.
-         *
-         * @param yCopy Bignat object which will be set with value of this point
+         * Double this point. Pure implementation without KeyAgreement.
          */
-        public void getY(Bignat yCopy) {
-            yCopy.set_size(this.getY(yCopy.as_byte_array(), (short) 0));
-        }
+        public void swDouble() {
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+            BigNat pX = rm.EC_BN_B;
+            BigNat pY = rm.EC_BN_C;
+            BigNat lambda = rm.EC_BN_D;
+            BigNat tmp = rm.EC_BN_E;
 
-        /**
-         * Doubles the current value of this point.
-         */
-        public void makeDouble() {
-            // doubling via add sometimes causes exception inside KeyAgreement engine
-            // this.add(this);
-            // Use bit slower, but more robust version via multiplication by 2
-            this.multiplication(Bignat_Helper.TWO);
+            getW(pointBuffer, (short) 0);
+
+            pX.from_byte_array(curve.COORD_SIZE, (short) 0, pointBuffer, (short) 1);
+
+            pY.from_byte_array(curve.COORD_SIZE, (short) 0, pointBuffer, (short) (1 + curve.COORD_SIZE));
+
+            lambda.mod_mult(pX, pX, curve.pBN);
+            lambda.mod_mult(lambda, ResourceManager.THREE, curve.pBN);
+            lambda.mod_add(curve.aBN, curve.pBN);
+
+            tmp.clone(pY);
+            tmp.mod_add(tmp, curve.pBN);
+            tmp.mod_inv(curve.pBN);
+            lambda.mod_mult(lambda, tmp, curve.pBN);
+            tmp.mod_mult(lambda, lambda, curve.pBN);
+            tmp.mod_sub(pX, curve.pBN);
+            tmp.mod_sub(pX, curve.pBN);
+            tmp.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) 1);
+
+            tmp.mod_sub(pX, curve.pBN);
+            tmp.mod_mult(tmp, lambda, curve.pBN);
+            tmp.mod_add(pY, curve.pBN);
+            tmp.mod_negate(curve.pBN);
+            tmp.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (1 + curve.COORD_SIZE));
+
+            setW(pointBuffer, (short) 0, curve.POINT_SIZE);
         }
 
         /**
          * Adds this (P) and provided (Q) point. Stores a resulting value into this point.
+         *
          * @param other point to be added to this.
          */
         public void add(ECPoint other) {
+            if (OperationSupport.getInstance().EC_HW_ADD) {
+                hwAdd(other);
+            } else {
+                swAdd(other);
+            }
+        }
+
+        /**
+         * Implements adding of two points without ALG_EC_PACE_GM.
+         *
+         * @param other point to be added to this.
+         */
+        private void swAdd(ECPoint other) {
             boolean samePoint = this == other || isEqual(other);
-            if (samePoint && OperationSupport.getInstance().ECDH_XY) {
-                this.multiplication(Bignat_Helper.TWO);
+            if (samePoint && OperationSupport.getInstance().EC_HW_XY) {
+                multiplication(ResourceManager.TWO);
                 return;
             }
 
-            ech.lock(ech.uncompressed_point_arr1);
-            this.thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            ech.fnc_add_x_p.lock();
-            ech.fnc_add_x_p.set_size(this.theCurve.COORD_SIZE);
-            ech.fnc_add_x_p.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) 1);
-            ech.fnc_add_y_p.lock();
-            ech.fnc_add_y_p.set_size(this.theCurve.COORD_SIZE);
-            ech.fnc_add_y_p.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-            ech.unlock(ech.uncompressed_point_arr1);
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+            BigNat xR = rm.EC_BN_B;
+            BigNat yR = rm.EC_BN_C;
+            BigNat xP = rm.EC_BN_D;
+            BigNat yP = rm.EC_BN_E;
+            BigNat xQ = rm.EC_BN_F;
+            BigNat nominator = rm.EC_BN_B;
+            BigNat denominator = rm.EC_BN_C;
+            BigNat lambda = rm.EC_BN_A;
+
+            point.getW(pointBuffer, (short) 0);
+            xP.set_size(curve.COORD_SIZE);
+            xP.from_byte_array(curve.COORD_SIZE, (short) 0, pointBuffer, (short) 1);
+            yP.set_size(curve.COORD_SIZE);
+            yP.from_byte_array(curve.COORD_SIZE, (short) 0, pointBuffer, (short) (1 + curve.COORD_SIZE));
+
 
             // l = (y_q-y_p)/(x_q-x_p))
             // x_r = l^2 - x_p -x_q
             // y_r = l(x_p-x_r)-y_p
 
-            // P+Q=R
-            ech.fnc_add_nominator.lock();
-            ech.fnc_add_denominator.lock();
+            // P + Q = R
             if (samePoint) {
-                //lambda = (3(x_p^2)+a)/(2y_p)
-                //(3(x_p^2)+a)
-                ech.fnc_add_nominator.clone(ech.fnc_add_x_p);
-                ech.fnc_add_nominator.mod_exp(Bignat_Helper.TWO, this.theCurve.pBN);
-                ech.fnc_add_nominator.mod_mult(ech.fnc_add_nominator, Bignat_Helper.THREE, this.theCurve.pBN);
-                ech.fnc_add_nominator.mod_add(this.theCurve.aBN, this.theCurve.pBN);
+                // lambda = (3(x_p^2)+a)/(2y_p)
+                // (3(x_p^2)+a)
+                nominator.clone(xP);
+                nominator.mod_exp(ResourceManager.TWO, curve.pBN);
+                nominator.mod_mult(nominator, ResourceManager.THREE, curve.pBN);
+                nominator.mod_add(curve.aBN, curve.pBN);
                 // (2y_p)
-                ech.fnc_add_denominator.clone(ech.fnc_add_y_p);
-                ech.fnc_add_denominator.mod_mult(ech.fnc_add_y_p, Bignat_Helper.TWO, this.theCurve.pBN);
-                ech.fnc_add_denominator.mod_inv(this.theCurve.pBN);
+                denominator.clone(yP);
+                denominator.mod_mult(yP, ResourceManager.TWO, curve.pBN);
+                denominator.mod_inv(curve.pBN);
 
             } else {
-                // lambda=(y_q-y_p)/(x_q-x_p) mod p
-                ech.lock(ech.uncompressed_point_arr1);
-                other.thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-                ech.fnc_add_x_q.lock();
-                ech.fnc_add_x_q.set_size(this.theCurve.COORD_SIZE);
-                ech.fnc_add_x_q.from_byte_array(other.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) 1);
-                ech.fnc_add_nominator.set_size(this.theCurve.COORD_SIZE);
-                ech.fnc_add_nominator.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-                ech.unlock(ech.uncompressed_point_arr1);
+                // lambda = (y_q-y_p) / (x_q-x_p) mod p
+                other.point.getW(pointBuffer, (short) 0);
+                xQ.set_size(curve.COORD_SIZE);
+                xQ.from_byte_array(other.curve.COORD_SIZE, (short) 0, pointBuffer, (short) 1);
+                nominator.set_size(curve.COORD_SIZE);
+                nominator.from_byte_array(curve.COORD_SIZE, (short) 0, pointBuffer, (short) (1 + curve.COORD_SIZE));
 
-                ech.fnc_add_nominator.mod(this.theCurve.pBN);
+                nominator.mod(curve.pBN);
 
-                ech.fnc_add_nominator.mod_sub(ech.fnc_add_y_p, this.theCurve.pBN);
+                nominator.mod_sub(yP, curve.pBN);
 
                 // (x_q-x_p)
-                ech.fnc_add_denominator.clone(ech.fnc_add_x_q);
-                ech.fnc_add_denominator.mod(this.theCurve.pBN);
-                ech.fnc_add_denominator.mod_sub(ech.fnc_add_x_p, this.theCurve.pBN);
-                ech.fnc_add_denominator.mod_inv(this.theCurve.pBN);
+                denominator.clone(xQ);
+                denominator.mod(curve.pBN);
+                denominator.mod_sub(xP, curve.pBN);
+                denominator.mod_inv(curve.pBN);
             }
 
-            ech.fnc_add_lambda.lock();
-            ech.fnc_add_lambda.resize_to_max(false);
-            ech.fnc_add_lambda.zero();
-            ech.fnc_add_lambda.mod_mult(ech.fnc_add_nominator, ech.fnc_add_denominator, this.theCurve.pBN);
-            ech.fnc_add_nominator.unlock();
-            ech.fnc_add_denominator.unlock();
+            lambda.resize_to_max(false);
+            lambda.zero();
+            lambda.mod_mult(nominator, denominator, curve.pBN);
 
-            // (x_p,y_p)+(x_q,y_q)=(x_r,y_r)
-            // lambda=(y_q-y_p)/(x_q-x_p)
+            // (x_p, y_p) + (x_q, y_q) = (x_r, y_r)
+            // lambda = (y_q - y_p) / (x_q - x_p)
 
-            //x_r=lambda^2-x_p-x_q
-            ech.fnc_add_x_r.lock();
+            // x_r = lambda^2 - x_p - x_q
             if (samePoint) {
-                short len = this.multiplication_x_KA(Bignat_Helper.TWO, ech.fnc_add_x_r.as_byte_array(), (short) 0);
-                ech.fnc_add_x_r.set_size(len);
+                short len = multXKA(ResourceManager.TWO, xR.as_byte_array(), (short) 0);
+                xR.set_size(len);
             } else {
-                ech.fnc_add_x_r.clone(ech.fnc_add_lambda);
-                //m_occ.ecHelper.fnc_add_x_r.mod_exp(occ.bnHelper.TWO, this.TheCurve.pBN);
-                ech.fnc_add_x_r.mod_exp2(this.theCurve.pBN);
-                ech.fnc_add_x_r.mod_sub(ech.fnc_add_x_p, this.theCurve.pBN);
-                ech.fnc_add_x_r.mod_sub(ech.fnc_add_x_q, this.theCurve.pBN);
-                ech.fnc_add_x_q.unlock();
+                xR.clone(lambda);
+                xR.mod_exp2(curve.pBN);
+                xR.mod_sub(xP, curve.pBN);
+                xR.mod_sub(xQ, curve.pBN);
             }
-            //y_r=lambda(x_p-x_r)-y_p
-            ech.fnc_add_y_r.lock();
-            ech.fnc_add_y_r.clone(ech.fnc_add_x_p);
-            ech.fnc_add_x_p.unlock();
-            ech.fnc_add_y_r.mod_sub(ech.fnc_add_x_r, this.theCurve.pBN);
-            ech.fnc_add_y_r.mod_mult(ech.fnc_add_y_r, ech.fnc_add_lambda, this.theCurve.pBN);
-            ech.fnc_add_lambda.unlock();
-            ech.fnc_add_y_r.mod_sub(ech.fnc_add_y_p, this.theCurve.pBN);
-            ech.fnc_add_y_p.unlock();
 
-            ech.lock(ech.uncompressed_point_arr1);
-            ech.uncompressed_point_arr1[0] = (byte)0x04;
-            // If x_r.length() and y_r.length() is smaller than this.TheCurve.COORD_SIZE due to leading zeroes which were shrinked before, then we must add these back
-            ech.fnc_add_x_r.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) 1);
-            ech.fnc_add_x_r.unlock();
-            ech.fnc_add_y_r.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-            ech.fnc_add_y_r.unlock();
-            this.setW(ech.uncompressed_point_arr1, (short) 0, this.theCurve.POINT_SIZE);
-            ech.unlock(ech.uncompressed_point_arr1);
+            // y_r = lambda(x_p - x_r) - y_p
+            yR.clone(xP);
+            yR.mod_sub(xR, curve.pBN);
+            yR.mod_mult(yR, lambda, curve.pBN);
+            yR.mod_sub(yP, curve.pBN);
+
+            pointBuffer[0] = (byte) 0x04;
+            // If x_r.length() and y_r.length() is smaller than curve.COORD_SIZE due to leading zeroes which were shrunk before, then we must add these back
+            xR.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) 1);
+            yR.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (1 + curve.COORD_SIZE));
+            setW(pointBuffer, (short) 0, curve.POINT_SIZE);
         }
 
         /**
-         * Multiply value of this point by provided scalar. Stores the result into
-         * this point.
+         * Implements adding of two points via ALG_EC_PACE_GM.
          *
-         * @param scalar value of scalar for multiplication
+         * @param other point to be added to this.
          */
-        public void multiplication(byte[] scalar, short scalarOffset, short scalarLen) {
-            ech.fnc_multiplication_scalar.lock();
-            ech.fnc_multiplication_scalar.set_size(scalarLen);
-            ech.fnc_multiplication_scalar.from_byte_array(scalarLen, (short) 0, scalar, scalarOffset);
-            multiplication(ech.fnc_multiplication_scalar);
-            ech.fnc_multiplication_scalar.unlock();
+        private void hwAdd(ECPoint other) {
+            byte[] pointBuffer = rm.POINT_ARRAY_B;
+
+            setW(pointBuffer, (short) 0, multAndAddKA(ResourceManager.ONE_COORD, other, pointBuffer, (short) 0));
         }
 
         /**
          * Multiply value of this point by provided scalar. Stores the result into this point.
+         *
+         * @param scalarBytes value of scalar for multiplication
+         */
+        public void multiplication(byte[] scalarBytes, short scalarOffset, short scalarLen) {
+            BigNat scalar = rm.EC_BN_F;
+
+            scalar.set_size(scalarLen);
+            scalar.from_byte_array(scalarLen, (short) 0, scalarBytes, scalarOffset);
+            multiplication(scalar);
+        }
+
+        /**
+         * Multiply value of this point by provided scalar. Stores the result into this point.
+         *
          * @param scalar value of scalar for multiplication
          */
-        public void multiplication(Bignat scalar) {
-            if (ech.multKA.getAlgorithm() == ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN_XY) {
-                this.multiplication_xy(scalar);
-            } else if (ech.multKA.getAlgorithm() == ECPoint_Helper.ALG_EC_SVDP_DH_PLAIN) {
-                this.multiplication_x(scalar);
+        public void multiplication(BigNat scalar) {
+            if (OperationSupport.getInstance().EC_SW_DOUBLE && scalar.same_value(ResourceManager.TWO)) {
+                swDouble();
+                // } else if (rm.ecMultKA.getAlgorithm() == KeyAgreement.ALG_EC_SVDP_DH_PLAIN_XY) {
+            } else if (rm.ecMultKA.getAlgorithm() == (byte) 6) {
+                multXY(scalar);
+                //} else if (rm.ecMultKA.getAlgorithm() == KeyAgreement.ALG_EC_SVDP_DH_PLAIN) {
+            } else if (rm.ecMultKA.getAlgorithm() == (byte) 3) {
+                multX(scalar);
             } else {
                 ISOException.throwIt(ReturnCodes.SW_OPERATION_NOT_SUPPORTED);
             }
         }
 
         /**
-         * Multiply value of this point by provided scalar using X-only key agreement. Stores the result into this point.
+         * Multiply this point by a given scalar and add another point to the result.
+         *
+         * @param scalar value of scalar for multiplication
+         * @param point the other point
+         */
+        public void multAndAdd(BigNat scalar, ECPoint point) {
+            if (OperationSupport.getInstance().EC_HW_ADD) {
+                byte[] pointBuffer = rm.POINT_ARRAY_B;
+
+                setW(pointBuffer, (short) 0, multAndAddKA(scalar, point, pointBuffer, (short) 0));
+            } else {
+                multiplication(scalar);
+                add(point);
+            }
+
+        }
+
+        /**
+         * Multiply this point by a given scalar and add another point to the result and store the result into outBuffer.
+         *
+         * @param scalar value of scalar for multiplication
+         * @param point the other point
+         * @param outBuffer output buffer
+         * @param outBufferOffset offset in the output buffer
+         */
+        private short multAndAddKA(BigNat scalar, ECPoint point, byte[] outBuffer, short outBufferOffset) {
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+
+            short len = this.getW(pointBuffer, (short) 0);
+            curve.disposable_priv.setG(pointBuffer, (short) 0, len);
+            curve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
+            rm.ecAddKA.init(curve.disposable_priv);
+
+            len = point.getW(pointBuffer, (short) 0);
+            len = rm.ecAddKA.generateSecret(pointBuffer, (short) 0, len, outBuffer, outBufferOffset);
+            return len;
+        }
+
+        /**
+         * Multiply value of this point by provided scalar using XY key agreement. Stores the result into this point.
+         *
          * @param scalar value of scalar for multiplication
          */
-        public void multiplication_xy(Bignat scalar) {
-            ech.lock(ech.uncompressed_point_arr2);
-            short len = multiplication_xy_KA(scalar, ech.uncompressed_point_arr2, (short) 0);
-            this.setW(ech.uncompressed_point_arr2, (short) 0, len);
-            ech.unlock(ech.uncompressed_point_arr2);
+        public void multXY(BigNat scalar) {
+            byte[] pointBuffer = rm.POINT_ARRAY_B;
+
+            short len = multXYKA(scalar, pointBuffer, (short) 0);
+            setW(pointBuffer, (short) 0, len);
         }
 
         /**
          * Multiplies this point value with provided scalar and stores result into
          * provided array. No modification of this point is performed.
-         * Native KeyAgreement engine is used.
+         * Native XY KeyAgreement engine is used.
          *
-         * @param scalar value of scalar for multiplication
-         * @param outBuffer output array for resulting value
+         * @param scalar          value of scalar for multiplication
+         * @param outBuffer       output array for resulting value
          * @param outBufferOffset offset within output array
          * @return length of resulting value (in bytes)
          */
-        public short multiplication_xy_KA(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
-            theCurve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
-            ech.multKA.init(theCurve.disposable_priv);
+        public short multXYKA(BigNat scalar, byte[] outBuffer, short outBufferOffset) {
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
 
-            ech.lock(ech.uncompressed_point_arr1);
-            short len = this.getW(ech.uncompressed_point_arr1, (short) 0);
-            len = ech.multKA.generateSecret(ech.uncompressed_point_arr1, (short) 0, len, outBuffer, outBufferOffset);
-            ech.unlock(ech.uncompressed_point_arr1);
+            curve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
+            rm.ecMultKA.init(curve.disposable_priv);
+
+            short len = getW(pointBuffer, (short) 0);
+            len = rm.ecMultKA.generateSecret(pointBuffer, (short) 0, len, outBuffer, outBufferOffset);
             return len;
         }
 
         /**
          * Multiply value of this point by provided scalar using X-only key agreement. Stores the result into this point.
+         *
          * @param scalar value of scalar for multiplication
          */
-        public void multiplication_x(Bignat scalar) {
-            ech.fnc_multiplication_x.lock();
-            short len = this.multiplication_x_KA(scalar, ech.fnc_multiplication_x.as_byte_array(), (short) 0);
-            ech.fnc_multiplication_x.set_size(len);
+        private void multX(BigNat scalar) {
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+            byte[] resultBuffer = rm.ARRAY_A;
+            BigNat x = rm.EC_BN_B;
+            BigNat ySq = rm.EC_BN_C;
+            BigNat y1 = rm.EC_BN_D;
+            BigNat y2 = rm.EC_BN_B;
+
+            short len = multXKA(scalar, x.as_byte_array(), (short) 0);
+            x.set_size(len);
+
             //Y^2 = X^3 + XA + B = x(x^2+A)+B
-            ech.fnc_multiplication_y_sq.lock();
-            ech.fnc_multiplication_y_sq.clone(ech.fnc_multiplication_x);
-            ech.fnc_multiplication_y_sq.mod_exp(Bignat_Helper.TWO, this.theCurve.pBN);
-            ech.fnc_multiplication_y_sq.mod_add(this.theCurve.aBN, this.theCurve.pBN);
-            ech.fnc_multiplication_y_sq.mod_mult(ech.fnc_multiplication_y_sq, ech.fnc_multiplication_x, this.theCurve.pBN);
-            ech.fnc_multiplication_y_sq.mod_add(this.theCurve.bBN, this.theCurve.pBN);
-            ech.fnc_multiplication_y1.lock();
-            ech.fnc_multiplication_y1.clone(ech.fnc_multiplication_y_sq);
-            ech.fnc_multiplication_y_sq.unlock();
-            ech.fnc_multiplication_y1.sqrt_FP(this.theCurve.pBN);
+            ySq.clone(x);
+            ySq.mod_exp(ResourceManager.TWO, curve.pBN);
+            ySq.mod_add(curve.aBN, curve.pBN);
+            ySq.mod_mult(ySq, x, curve.pBN);
+            ySq.mod_add(curve.bBN, curve.pBN);
+            y1.clone(ySq);
+            y1.sqrt_FP(curve.pBN);
 
             // Construct public key with <x, y_1>
-            ech.lock(ech.uncompressed_point_arr1);
-            ech.uncompressed_point_arr1[0] = 0x04;
-            ech.fnc_multiplication_x.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) 1);
-            ech.fnc_multiplication_x.unlock();
-            ech.fnc_multiplication_y1.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + theCurve.COORD_SIZE));
-            this.setW(ech.uncompressed_point_arr1, (short) 0, theCurve.POINT_SIZE); //So that we can convert to pub key
+            pointBuffer[0] = 0x04;
+            x.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) 1);
+            y1.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (1 + curve.COORD_SIZE));
+            setW(pointBuffer, (short) 0, curve.POINT_SIZE); //So that we can convert to pub key
 
             // Check if public point <x, y_1> corresponds to the "secret" (i.e., our scalar)
-            ech.lock(ech.fnc_multiplication_resultArray);
-            if (!SignVerifyECDSA(this.theCurve.bignatAsPrivateKey(scalar), this.asPublicKey(), this.ech.fnc_SignVerifyECDSA_signEngine, ech.fnc_multiplication_resultArray)) { //If verification fails, then pick the <x, y_2>
-                ech.fnc_multiplication_y2.lock();
-                ech.fnc_multiplication_y2.clone(this.theCurve.pBN); //y_2 = p - y_1
-                ech.fnc_multiplication_y2.mod_sub(ech.fnc_multiplication_y1, this.theCurve.pBN);
-                ech.fnc_multiplication_y2.copy_to_buffer(ech.uncompressed_point_arr1, (short) (1 + theCurve.COORD_SIZE));
-                ech.fnc_multiplication_y2.unlock();
+            if (!SignVerifyECDSA(curve.bignatAsPrivateKey(scalar), asPublicKey(), rm.verifyEcdsa, resultBuffer)) { // If verification fails, then pick the <x, y_2>
+                y2.clone(curve.pBN); // y_2 = p - y_1
+                y2.mod_sub(y1, curve.pBN);
+                y2.copy_to_buffer(pointBuffer, (short) (1 + curve.COORD_SIZE));
             }
-            ech.unlock(ech.fnc_multiplication_resultArray);
-            ech.fnc_multiplication_y1.unlock();
 
-            this.setW(ech.uncompressed_point_arr1, (short)0, theCurve.POINT_SIZE);
-            ech.unlock(ech.uncompressed_point_arr1);
+
+            setW(pointBuffer, (short) 0, curve.POINT_SIZE);
         }
-
 
         /**
          * Multiplies this point value with provided scalar and stores result into
          * provided array. No modification of this point is performed.
-         * Native KeyAgreement engine is used.
+         * Native X-only KeyAgreement engine is used.
          *
-         * @param scalar value of scalar for multiplication
-         * @param outBuffer output array for resulting value
+         * @param scalar          value of scalar for multiplication
+         * @param outBuffer       output array for resulting value
          * @param outBufferOffset offset within output array
          * @return length of resulting value (in bytes)
          */
-        public short multiplication_x_KA(Bignat scalar, byte[] outBuffer, short outBufferOffset) {
-            // NOTE: potential problem on real cards (j2e) - when small scalar is used (e.g., Bignat.TWO), operation sometimes freezes
-            theCurve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
-            ech.multKA.init(theCurve.disposable_priv);
+        private short multXKA(BigNat scalar, byte[] outBuffer, short outBufferOffset) {
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+            // NOTE: potential problem on real cards (j2e) - when small scalar is used (e.g., BigNat.TWO), operation sometimes freezes
+            curve.disposable_priv.setS(scalar.as_byte_array(), (short) 0, scalar.length());
 
-            ech.lock(ech.uncompressed_point_arr1);
-            short len = this.getW(ech.uncompressed_point_arr1, (short) 0);
-            len = ech.multKA.generateSecret(ech.uncompressed_point_arr1, (short) 0, len, outBuffer, outBufferOffset);
-            ech.unlock(ech.uncompressed_point_arr1);
+            rm.ecMultKA.init(curve.disposable_priv);
+
+            short len = getW(pointBuffer, (short) 0);
+            len = rm.ecMultKA.generateSecret(pointBuffer, (short) 0, len, outBuffer, outBufferOffset);
             // Return always length of whole coordinate X instead of len - some real cards returns shorter value equal to SHA-1 output size although PLAIN results is filled into buffer (GD60)
-            return this.theCurve.COORD_SIZE;
+            return curve.COORD_SIZE;
         }
 
         /**
-         * Computes negation of this point.
+         * Restore point from X coordinate. Stores one of the two results into this point.
+         *
+         * @param x the x coordinate
          */
-        public void negate() {
-            // Operation will dump point into uncompressed_point_arr, negate Y and restore back
-            ech.fnc_negate_yBN.lock();
-            ech.lock(ech.uncompressed_point_arr1);
-            thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            ech.fnc_negate_yBN.set_size(this.theCurve.COORD_SIZE);
-            ech.fnc_negate_yBN.from_byte_array(this.theCurve.COORD_SIZE, (short) 0, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-            ech.fnc_negate_yBN.mod_negate(this.theCurve.pBN);
+        private void fromX(BigNat x) {
+            BigNat y_sq = rm.EC_BN_C;
+            BigNat y = rm.EC_BN_D;
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
 
-            // Restore whole point back
-            ech.fnc_negate_yBN.prepend_zeros(this.theCurve.COORD_SIZE, ech.uncompressed_point_arr1, (short) (1 + this.theCurve.COORD_SIZE));
-            ech.fnc_negate_yBN.unlock();
-            this.setW(ech.uncompressed_point_arr1, (short) 0, this.theCurve.POINT_SIZE);
-            ech.unlock(ech.uncompressed_point_arr1);
+            //Y^2 = X^3 + XA + B = x(x^2+A)+B
+            y_sq.clone(x);
+            y_sq.mod_exp(ResourceManager.TWO, curve.pBN);
+            y_sq.mod_add(curve.aBN, curve.pBN);
+            y_sq.mod_mult(y_sq, x, curve.pBN);
+            y_sq.mod_add(curve.bBN, curve.pBN);
+            y.clone(y_sq);
+            y.sqrt_FP(curve.pBN);
+
+            // Construct public key with <x, y_1>
+            pointBuffer[0] = 0x04;
+            x.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) 1);
+            y.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (1 + curve.COORD_SIZE));
+            setW(pointBuffer, (short) 0, curve.POINT_SIZE);
         }
 
         /**
@@ -526,45 +485,42 @@ public class jcmathlib {
          * @return true if Y coordinate is even; false otherwise
          */
         public boolean isYEven() {
-            ech.lock(ech.uncompressed_point_arr1);
-            thePoint.getW(ech.uncompressed_point_arr1, (short) 0);
-            boolean result = ech.uncompressed_point_arr1[(short)(theCurve.POINT_SIZE - 1)] % 2 == 0;
-            ech.unlock(ech.uncompressed_point_arr1);
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+
+            point.getW(pointBuffer, (short) 0);
+            boolean result = pointBuffer[(short) (curve.POINT_SIZE - 1)] % 2 == 0;
             return result;
         }
 
         /**
          * Compares this and provided point for equality. The comparison is made using hash of both values to prevent leak of position of mismatching byte.
+         *
          * @param other second point for comparison
          * @return true if both point are exactly equal (same length, same value), false otherwise
          */
         public boolean isEqual(ECPoint other) {
-            boolean bResult = false;
-            if (this.length() != other.length()) {
+            if (length() != other.length()) {
                 return false;
             }
-            else {
-                // The comparison is made with hash of point values instead of directly values.
-                // This way, offset of first mismatching byte is not leaked via timing side-channel.
-                // Additionally, only single array is required for storage of plain point values thus saving some RAM.
-                ech.lock(ech.uncompressed_point_arr1);
-                ech.lock(ech.fnc_isEqual_hashArray);
-                //ech.lock(ech.fnc_isEqual_hashEngine);
-                short len = this.getW(ech.uncompressed_point_arr1, (short) 0);
-                ech.fnc_isEqual_hashEngine.doFinal(ech.uncompressed_point_arr1, (short) 0, len, ech.fnc_isEqual_hashArray, (short) 0);
-                len = other.getW(ech.uncompressed_point_arr1, (short) 0);
-                len = ech.fnc_isEqual_hashEngine.doFinal(ech.uncompressed_point_arr1, (short) 0, len, ech.uncompressed_point_arr1, (short) 0);
-                bResult = Util.arrayCompare(ech.fnc_isEqual_hashArray, (short) 0, ech.uncompressed_point_arr1, (short) 0, len) == 0;
-                //ech.unlock(ech.fnc_isEqual_hashEngine);
-                ech.unlock(ech.fnc_isEqual_hashArray);
-                ech.unlock(ech.uncompressed_point_arr1);
-            }
+            // The comparison is made with hash of point values instead of directly values.
+            // This way, offset of first mismatching byte is not leaked via timing side-channel.
+            // Additionally, only single array is required for storage of plain point values thus saving some RAM.
+            byte[] pointBuffer = rm.POINT_ARRAY_A;
+            byte[] hashBuffer = rm.HASH_ARRAY;
+
+            short len = getW(pointBuffer, (short) 0);
+            rm.hashEngine.doFinal(pointBuffer, (short) 0, len, hashBuffer, (short) 0);
+            len = other.getW(pointBuffer, (short) 0);
+            len = rm.hashEngine.doFinal(pointBuffer, (short) 0, len, pointBuffer, (short) 0);
+            boolean bResult = Util.arrayCompare(hashBuffer, (short) 0, pointBuffer, (short) 0, len) == 0;
 
             return bResult;
         }
 
         static byte[] msg = {(byte) 0x01, (byte) 0x01, (byte) 0x02, (byte) 0x03};
+
         public static boolean SignVerifyECDSA(ECPrivateKey privateKey, ECPublicKey publicKey, Signature signEngine, byte[] tmpSignArray) {
+            // TODO does not work properly in simulator
             signEngine.init(privateKey, Signature.MODE_SIGN);
             short signLen = signEngine.sign(msg, (short) 0, (short) msg.length, tmpSignArray, (short) 0);
             signEngine.init(publicKey, Signature.MODE_VERIFY);
@@ -572,72 +528,186 @@ public class jcmathlib {
         }
 
 
-        //
-        // ECKey methods
-        //
-        public void setFieldFP(byte[] bytes, short s, short s1) throws CryptoException {
-            thePoint.setFieldFP(bytes, s, s1);
+        /**
+         * Decode SEC1-encoded point and load it into this.
+         *
+         * @param point array containing SEC1-encoded point
+         * @param offset offset within the output buffer
+         * @param length length of the encoded point
+         * @return true if the point was compressed; false otherwise
+         */
+        public boolean decode(byte[] point, short offset, short length) {
+            if(length == (short) (1 + 2 * curve.COORD_SIZE) && point[offset] == 0x04) {
+                setW(point, offset, length);
+                return false;
+            }
+            if (length == (short) (1 + curve.COORD_SIZE)) {
+                BigNat y = rm.EC_BN_C;
+                BigNat x = rm.EC_BN_D;
+                BigNat p = rm.EC_BN_E;
+                byte[] pointBuffer = rm.POINT_ARRAY_A;
+
+                x.from_byte_array(curve.COORD_SIZE, (short) 0, point, (short) (offset + 1));
+
+                //Y^2 = X^3 + XA + B = x(x^2+A)+B
+                y.clone(x);
+                y.mod_exp(ResourceManager.TWO, curve.pBN);
+                y.mod_add(curve.aBN, curve.pBN);
+                y.mod_mult(y, x, curve.pBN);
+                y.mod_add(curve.bBN, curve.pBN);
+                y.sqrt_FP(curve.pBN);
+
+                pointBuffer[0] = 0x04;
+                x.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) 1);
+
+                byte parity = (byte) ((y.as_byte_array()[(short) (curve.COORD_SIZE - 1)] & 0xff) % 2);
+                if ((parity == 0 && point[offset] != (byte) 0x02) || (parity == 1 && point[offset] != (byte) 0x03)) {
+                    p.from_byte_array(curve.p);
+                    p.subtract(y);
+                    p.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (curve.COORD_SIZE + 1));
+                } else {
+                    y.prepend_zeros(curve.COORD_SIZE, pointBuffer, (short) (curve.COORD_SIZE + 1));
+                }
+                setW(pointBuffer, (short) 0, curve.POINT_SIZE);
+                return true;
+            }
+            ISOException.throwIt(ReturnCodes.SW_ECPOINT_INVALID);
+            return true; // unreachable
         }
 
-        public void setFieldF2M(short s) throws CryptoException {
-            thePoint.setFieldF2M(s);
+        /**
+         * Encode this point into the output buffer.
+         *
+         * @param output output buffer; MUST be able to store offset + uncompressed size bytes
+         * @param offset offset within the output buffer
+         * @param compressed output compressed point if true; uncompressed otherwise
+         * @return length of output point
+         */
+        public short encode(byte[] output, short offset, boolean compressed) {
+            getW(output, offset);
+
+            if(compressed) {
+                if(output[offset] == (byte) 0x04) {
+                    output[offset] = (byte) (((output[(short) (offset + 2 * curve.COORD_SIZE)] & 0xff) % 2) == 0 ? 2 : 3);
+                }
+                return (short) (curve.COORD_SIZE + 1);
+            }
+
+            if(output[offset] != (byte) 0x04) {
+                BigNat y = rm.EC_BN_C;
+                BigNat x = rm.EC_BN_D;
+                BigNat p = rm.EC_BN_E;
+                x.from_byte_array(curve.COORD_SIZE, (short) 0, output, (short) (offset + 1));
+
+                //Y^2 = X^3 + XA + B = x(x^2+A)+B
+                y.clone(x);
+                y.mod_exp(ResourceManager.TWO, curve.pBN);
+                y.mod_add(curve.aBN, curve.pBN);
+                y.mod_mult(y, x, curve.pBN);
+                y.mod_add(curve.bBN, curve.pBN);
+                y.sqrt_FP(curve.pBN);
+                byte parity = (byte) ((y.as_byte_array()[(short) (curve.COORD_SIZE - 1)] & 0xff) % 2);
+                if ((parity == 0 && output[offset] != (byte) 0x02) || (parity == 1 && output[offset] != (byte) 0x03)) {
+                    p.from_byte_array(curve.p);
+                    p.subtract(y);
+                    p.prepend_zeros(curve.COORD_SIZE, output, (short) (offset + curve.COORD_SIZE + 1));
+                } else {
+                    y.prepend_zeros(curve.COORD_SIZE, output, (short) (offset + curve.COORD_SIZE + 1));
+                }
+                output[offset] = (byte) 0x04;
+            }
+            return (short) (2 * curve.COORD_SIZE + 1);
+        }
+    }
+
+    /**
+     * OperationSupport class
+     */
+    public static class OperationSupport {
+        private static OperationSupport instance;
+
+        public static final short SIMULATOR = 0x0000;
+        public static final short J2E145G = 0x0001;
+        public static final short J3H145 = 0x0002;
+        public static final short J3R180 = 0x0003;
+
+        public boolean RSA_MULT_TRICK = false;
+        public boolean RSA_MOD_MULT_TRICK = false;
+        public boolean RSA_MOD_EXP = false;
+        public boolean RSA_MOD_EXP_EXTRA_MOD = false;
+        public boolean RSA_MOD_EXP_PUB = false;
+        public boolean RSA_PREPEND_ZEROS = false;
+        public boolean RSA_KEY_REFRESH = false;
+        public boolean RSA_RESIZE_BASE = true;
+        public boolean RSA_RESIZE_MODULUS = true;
+        public boolean RSA_RESIZE_MODULUS_APPEND = false;
+        public boolean EC_HW_XY = false;
+        public boolean EC_HW_X = true;
+        public boolean EC_HW_ADD = false;
+        public boolean EC_SW_DOUBLE = false;
+        public boolean DEFERRED_INITIALIZATION = false;
+
+        private OperationSupport() {
         }
 
-        public void setFieldF2M(short s, short s1, short s2) throws CryptoException {
-            thePoint.setFieldF2M(s, s1, s2);
+        public static OperationSupport getInstance() {
+            if (OperationSupport.instance == null)
+                OperationSupport.instance = new OperationSupport();
+            return OperationSupport.instance;
         }
 
-        public void setA(byte[] bytes, short s, short s1) throws CryptoException {
-            thePoint.setA(bytes, s, s1);
-        }
-
-        public void setB(byte[] bytes, short s, short s1) throws CryptoException {
-            thePoint.setB(bytes, s, s1);
-        }
-
-        public void setG(byte[] bytes, short s, short s1) throws CryptoException {
-            thePoint.setG(bytes, s, s1);
-        }
-
-        public void setR(byte[] bytes, short s, short s1) throws CryptoException {
-            thePoint.setR(bytes, s, s1);
-        }
-
-        public void setK(short s) {
-            thePoint.setK(s);
-        }
-
-        public short getField(byte[] bytes, short s) throws CryptoException {
-            return thePoint.getField(bytes, s);
-        }
-
-        public short getA(byte[] bytes, short s) throws CryptoException {
-            return thePoint.getA(bytes, s);
-        }
-
-        public short getB(byte[] bytes, short s) throws CryptoException {
-            return thePoint.getB(bytes, s);
-        }
-
-        public short getG(byte[] bytes, short s) throws CryptoException {
-            return thePoint.getG(bytes, s);
-        }
-
-        public short getR(byte[] bytes, short s) throws CryptoException {
-            return thePoint.getR(bytes, s);
-        }
-
-        public short getK() throws CryptoException {
-            return thePoint.getK();
+        public void setCard(short card_identifier) {
+            switch (card_identifier) {
+                case SIMULATOR:
+                    RSA_MULT_TRICK = false;
+                    RSA_MOD_EXP = true;
+                    RSA_PREPEND_ZEROS = true;
+                    RSA_KEY_REFRESH = true;
+                    RSA_RESIZE_BASE = true;
+                    RSA_RESIZE_MODULUS = false;
+                    EC_SW_DOUBLE = true;
+                    EC_HW_XY = true;
+                    EC_HW_ADD = true;
+                    break;
+                case J2E145G:
+                    RSA_MOD_MULT_TRICK = false;
+                    RSA_MULT_TRICK = true;
+                    RSA_MOD_EXP = true;
+                    RSA_MOD_EXP_EXTRA_MOD = true;
+                    RSA_MOD_EXP_PUB = true;
+                    RSA_RESIZE_BASE = true;
+                    RSA_RESIZE_MODULUS = true;
+                    RSA_RESIZE_MODULUS_APPEND = true;
+                    EC_HW_X = true;
+                    break;
+                case J3H145:
+                    DEFERRED_INITIALIZATION = true;
+                    RSA_MOD_MULT_TRICK = true;
+                    RSA_MULT_TRICK = true;
+                    RSA_MOD_EXP = true;
+                    RSA_MOD_EXP_PUB = true;
+                    EC_HW_XY = true;
+                    EC_HW_ADD = true;
+                    break;
+                case J3R180:
+                    DEFERRED_INITIALIZATION = true;
+                    RSA_MOD_MULT_TRICK = true;
+                    RSA_MULT_TRICK = true;
+                    RSA_MOD_EXP = true;
+                    EC_HW_XY = true;
+                    EC_HW_ADD = true;
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
 
     /**
      * Configure itself to proper lengths and other parameters according to intended length of ECC
-     * @author Petr Svenda
      */
-    static class ECConfig {
+    public static class ECConfig {
         /**
          * The size of speedup engine used for fast modulo exponent computation
          * (must be larger than biggest Bignat used)
@@ -662,15 +732,7 @@ public class jcmathlib {
         public short MAX_COORD_SIZE = (short) 32; // MAX_POINT_SIZE / 2
 
 
-        public ResourceManager rm = null;
-        /**
-         * Helper structure containing all preallocated objects necessary for Bignat operations
-         */
-        public Bignat_Helper bnh = null;
-        /**
-         * Helper structure containing all preallocated objects necessary for ECPoint operations
-         */
-        public ECPoint_Helper ech = null;
+        public ResourceManager rm;
 
         /**
          * Creates new control structure for requested bit length with all preallocated arrays and engines
@@ -678,14 +740,6 @@ public class jcmathlib {
          *      initialize properly underlying arrays and engines.
          */
         public ECConfig(short maxECLength) {
-
-            // Allocate helper objects for BN and EC
-            // Note: due to circular references, we need to split object creation and actual alloaction and initailiztion later (initialize())
-            rm = new ResourceManager();
-            bnh = new Bignat_Helper(rm);
-            ech = new ECPoint_Helper(rm);
-
-            // Set proper lengths and other internal settings based on required ECC length
             if (maxECLength <= (short) 256) {
                 setECC256Config();
             }
@@ -699,90 +753,50 @@ public class jcmathlib {
                 ISOException.throwIt(ReturnCodes.SW_ECPOINT_INVALIDLENGTH);
             }
 
-            // Allocate shared resources and initialize mapping between shared objects and helpers
-            rm.initialize(MAX_POINT_SIZE, MAX_COORD_SIZE, MAX_BIGNAT_SIZE, MULT_RSA_ENGINE_MAX_LENGTH_BITS, bnh);
-            bnh.initialize(MODULO_RSA_ENGINE_MAX_LENGTH_BITS, MULT_RSA_ENGINE_MAX_LENGTH_BITS);
-            ech.initialize();
+            rm = new ResourceManager(MAX_POINT_SIZE, MAX_COORD_SIZE, MAX_BIGNAT_SIZE, MULT_RSA_ENGINE_MAX_LENGTH_BITS, MODULO_RSA_ENGINE_MAX_LENGTH_BITS);
         }
 
         public void refreshAfterReset() {
-            if (rm.locker != null) {
-                rm.locker.refreshAfterReset();
-            }
-        }
-
-        void reset() {
-            bnh.FLAG_FAST_MULT_VIA_RSA = false;
         }
 
         public void setECC256Config() {
-            reset();
             MODULO_RSA_ENGINE_MAX_LENGTH_BITS = (short) 512;
             MULT_RSA_ENGINE_MAX_LENGTH_BITS = (short) 768;
             MAX_POINT_SIZE = (short) 64;
             computeDerivedLengths();
         }
         public void setECC384Config() {
-            reset();
             MODULO_RSA_ENGINE_MAX_LENGTH_BITS = (short) 768;
             MULT_RSA_ENGINE_MAX_LENGTH_BITS = (short) 1024;
             MAX_POINT_SIZE = (short) 96;
             computeDerivedLengths();
         }
         public void setECC512Config() {
-            reset();
             MODULO_RSA_ENGINE_MAX_LENGTH_BITS = (short) 1024;
             MULT_RSA_ENGINE_MAX_LENGTH_BITS = (short) 1280;
             MAX_POINT_SIZE = (short) 128;
             computeDerivedLengths();
         }
-        public void setECC521Config() {
-            reset();
-            MODULO_RSA_ENGINE_MAX_LENGTH_BITS = (short) 1280;
-            MULT_RSA_ENGINE_MAX_LENGTH_BITS = (short) 1280;
-            MAX_POINT_SIZE = (short) 129;
-            computeDerivedLengths();
-        }
 
         private void computeDerivedLengths() {
-            MAX_BIGNAT_SIZE = (short) ((short) (bnh.MODULO_RSA_ENGINE_MAX_LENGTH_BITS / 8) + 1);
+            MAX_BIGNAT_SIZE = (short) ((short) (MODULO_RSA_ENGINE_MAX_LENGTH_BITS / 8) + 1);
             MAX_COORD_SIZE = (short) (MAX_POINT_SIZE / 2);
-        }
-
-        /**
-         * Unlocks all logically locked arrays and objects. Useful as recovery after premature end of some operation (e.g., due to exception)
-         * when some objects remains locked.
-         */
-        void unlockAll() {
-            rm.unlockAll();
-            rm.locker.unlockAll();
         }
     }
 
-
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class ECCurve {
+    public static class ECCurve {
         public final short KEY_LENGTH; //Bits
         public final short POINT_SIZE; //Bytes
         public final short COORD_SIZE; //Bytes
 
         //Parameters
-        public byte[] p = null;
-        public byte[] a = null;
-        public byte[] b = null;
-        public byte[] G = null;
-        public byte[] r = null;
-
-        public Bignat pBN;
-        public Bignat aBN;
-        public Bignat bBN;
-        public Bignat rBN;
+        public byte[] p, a, b, G, r;
+        public BigNat pBN, aBN, bBN, rBN;
 
         public KeyPair disposable_pair;
         public ECPrivateKey disposable_priv;
+
+
 
         /**
          * Creates new curve object from provided parameters. Either copy of provided
@@ -796,21 +810,8 @@ public class jcmathlib {
          * @param r_arr array with r
          */
         public ECCurve(boolean bCopyArgs, byte[] p_arr, byte[] a_arr, byte[] b_arr, byte[] G_arr, byte[] r_arr) {
-            short bitlength = (short) (p_arr.length * 8);
-            if (OperationSupport.getInstance().PRECISE_CURVE_BITLENGTH) {
-                for (short i = 0; i < p_arr.length; ++i) {
-                    bitlength -= 8;
-                    if (p_arr[i] != (byte) 0x00) {
-                        short b = (short) (p_arr[i] & 0xff);
-                        while (b != (short) 0x00) {
-                            b >>= (short) 1;
-                            ++bitlength;
-                        }
-                        break;
-                    }
-                }
-            }
-            this.KEY_LENGTH = bitlength;
+            //ECCurve_initialize(p_arr, a_arr, b_arr, G_arr, r_arr);
+            this.KEY_LENGTH = (short) (p_arr.length * 8);
             this.POINT_SIZE = (short) G_arr.length;
             this.COORD_SIZE = (short) ((short) (G_arr.length - 1) / 2);
 
@@ -837,12 +838,12 @@ public class jcmathlib {
                 this.r = r_arr;
             }
 
-            // We will not modify values of p/a/b during the lifetime of curve => allocate helper bignats directly from the array
+            // We will not modify values of p/a/b/r during the lifetime of curve => allocate helper bignats directly from the array
             // Additionally, these Bignats will be only read from so Bignat_Helper can be null (saving need to pass as argument to ECCurve)
-            this.pBN = new Bignat(this.p, null);
-            this.aBN = new Bignat(this.a, null);
-            this.bBN = new Bignat(this.b, null);
-            this.rBN = new Bignat(this.r, null);
+            this.pBN = new BigNat(this.p, null);
+            this.aBN = new BigNat(this.a, null);
+            this.bBN = new BigNat(this.b, null);
+            this.rBN = new BigNat(this.r, null);
 
             this.disposable_pair = this.newKeyPair(null);
             this.disposable_priv = (ECPrivateKey) this.disposable_pair.getPrivate();
@@ -855,6 +856,7 @@ public class jcmathlib {
             this.pBN.from_byte_array(this.p);
             this.aBN.from_byte_array(this.a);
             this.bBN.from_byte_array(this.b);
+            this.rBN.from_byte_array(this.r);
         }
 
         /**
@@ -866,13 +868,21 @@ public class jcmathlib {
             ECPrivateKey privKey;
             ECPublicKey pubKey;
             if (existingKeyPair == null) { // Allocate if not supplied
-                privKey = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KEY_LENGTH, false);
-                pubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KEY_LENGTH, false);
-                existingKeyPair = new KeyPair(pubKey, privKey);
-            } else {
-                privKey = (ECPrivateKey) existingKeyPair.getPrivate();
-                pubKey = (ECPublicKey) existingKeyPair.getPublic();
+                existingKeyPair = new KeyPair(KeyPair.ALG_EC_FP, KEY_LENGTH);
             }
+
+            // Some implementation will not return valid pub key until ecKeyPair.genKeyPair() is called
+            // Other implementation will fail with exception if same is called => try catch and drop any exception
+            try {
+                pubKey = (ECPublicKey) existingKeyPair.getPublic();
+                if (pubKey == null) {
+                    existingKeyPair.genKeyPair();
+                }
+            } catch (Exception e) {
+            } // intentionally do nothing
+
+            privKey = (ECPrivateKey) existingKeyPair.getPrivate();
+            pubKey = (ECPublicKey) existingKeyPair.getPublic();
 
             // Set required values
             privKey.setFieldFP(p, (short) 0, (short) p.length);
@@ -889,11 +899,45 @@ public class jcmathlib {
             pubKey.setR(r, (short) 0, (short) r.length);
             pubKey.setK((short) 1);
 
-            privKey.setS(Bignat_Helper.CONST_ONE, (short) 0, (short) 1);
-            pubKey.setW(G, (short) 0, (short) G.length);
+            existingKeyPair.genKeyPair();
 
             return existingKeyPair;
         }
+
+        public KeyPair newKeyPair_legacy(KeyPair existingKeyPair) {
+            ECPrivateKey privKey;
+            ECPublicKey pubKey;
+            if (existingKeyPair == null) {
+                // We need to create required objects
+                privKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KEY_LENGTH, false);
+                pubKey = (ECPublicKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KEY_LENGTH, false);
+            }
+            else {
+                // Obtain from object
+                privKey = (ECPrivateKey) existingKeyPair.getPrivate();
+                pubKey = (ECPublicKey) existingKeyPair.getPublic();
+            }
+            // Set required values
+            privKey.setFieldFP(p, (short) 0, (short) p.length);
+            privKey.setA(a, (short) 0, (short) a.length);
+            privKey.setB(b, (short) 0, (short) b.length);
+            privKey.setG(G, (short) 0, (short) G.length);
+            privKey.setR(r, (short) 0, (short) r.length);
+
+            pubKey.setFieldFP(p, (short) 0, (short) p.length);
+            pubKey.setA(a, (short) 0, (short) a.length);
+            pubKey.setB(b, (short) 0, (short) b.length);
+            pubKey.setG(G, (short) 0, (short) G.length);
+            pubKey.setR(r, (short) 0, (short) r.length);
+
+            if (existingKeyPair == null) { // Allocate if not supplied
+                existingKeyPair = new KeyPair(pubKey, privKey);
+            }
+            existingKeyPair.genKeyPair();
+
+            return existingKeyPair;
+        }
+
 
         /**
          * Converts provided Bignat into temporary EC private key object. No new
@@ -901,654 +945,29 @@ public class jcmathlib {
          * @param bn Bignat with new value
          * @return ECPrivateKey initialized with provided Bignat
          */
-        public ECPrivateKey bignatAsPrivateKey(Bignat bn) {
+        public ECPrivateKey bignatAsPrivateKey(BigNat bn) {
             disposable_priv.setS(bn.as_byte_array(), (short) 0, bn.length());
             return disposable_priv;
         }
-
-        /**
-         * Set new G for this curve. Also updates all dependent key values.
-         * @param newG buffer with new G
-         * @param newGOffset start offset within newG
-         * @param newGLen length of new G
-         */
-        public void setG(byte[] newG, short newGOffset, short newGLen) {
-            Util.arrayCopyNonAtomic(newG, newGOffset, G, (short) 0, newGLen);
-            this.disposable_pair = this.newKeyPair(this.disposable_pair);
-            this.disposable_priv = (ECPrivateKey) this.disposable_pair.getPrivate();
-            this.disposable_priv.setG(newG, newGOffset, newGLen);
-        }
-    }
-
-
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class Integer {
-        private Bignat_Helper bnh;
-
-        private Bignat magnitude;
-        private byte sign;
-
-
-        /**
-         * Allocates integer with provided length and sets to zero.
-         * @param size
-         * @param bnh Bignat_Helper with all supporting objects
-         */
-        public Integer(short size, Bignat_Helper bnh) {
-            allocate(size, (byte) 0, null, (byte) -1, bnh);
-        }
-
-        /**
-         * Allocates integer from provided buffer and initialize by provided value.
-         * Sign is expected as first byte of value.
-         * @param value array with initial value
-         * @param valueOffset start offset within   value
-         * @param length length of array
-         * @param bnh Bignat_Helper with all supporting objects
-         */
-        public Integer(byte[] value, short valueOffset, short length, Bignat_Helper bnh) {
-            allocate(length, (value[valueOffset] == (byte) 0x00) ? (byte) 0 : (byte) 1, value, (short) (valueOffset + 1), bnh);
-        }
-
-        /**
-         * Allocates integer from provided array with explicit sign. No sign is expected in provided array.
-         *
-         * @param sign  sign of integer
-         * @param value array with initial value
-         * @param bnh Bignat_Helper with all supporting objects
-         */
-        public Integer(byte sign, byte[] value, Bignat_Helper bnh) {
-            allocate((short) value.length, sign, value, (short) 0, bnh);
-        }
-
-        /**
-         * Copy constructor of integer from other already existing value
-         * @param other integer to copy from
-         */
-        public Integer(Integer other) {
-            allocate(other.getSize(), other.getSign(), other.getMagnitude_b(), (short) 0, other.bnh);
-        }
-
-        /**
-         * Creates integer from existing Bignat and provided sign. If required,
-         * copy is performed, otherwise bignat is used as magnitude.
-         * @param sign  sign of integer
-         * @param magnitude initial magnitude
-         * @param bMakeCopy if true, magnitude is directly used (no copy). If false, new storage array is allocated.
-         */
-        public Integer(byte sign, Bignat magnitude, boolean bMakeCopy, Bignat_Helper bnh) {
-            if (bMakeCopy) {
-                // Copy from provided bignat
-                allocate(magnitude.length(), sign, magnitude.as_byte_array(), (short) 0, bnh);
-            }
-            else {
-                // Use directly provided Bignat as storage - no allocation
-                initialize(sign, magnitude, bnh);
-            }
-        }
-
-        /**
-         * Initialize integer object with provided sign and already allocated Bignat
-         * as magnitude
-         *
-         * @param sign sign of integer
-         * @param bnStorage magnitude (object is directly used, no copy is
-         * preformed)
-         */
-        private void initialize(byte sign, Bignat bnStorage, Bignat_Helper bnh) {
-            this.sign = sign;
-            this.magnitude = bnStorage;
-            this.bnh = bnh;
-        }
-
-        /**
-         * Allocates and initializes Integer.
-         *
-         * @param size length of integer
-         * @param sign sign of integer
-         * @param fromArray input array with initial value (copy of value is
-         * performed)
-         * @param fromArrayOffset start offset within fromArray
-         */
-        private void allocate(short size, byte sign, byte[] fromArray, short fromArrayOffset, Bignat_Helper bignatHelper) {
-            this.bnh = bignatHelper;
-            Bignat mag = new Bignat(size, JCSystem.MEMORY_TYPE_TRANSIENT_RESET, this.bnh);
-            if (fromArray != null) {
-                mag.from_byte_array(size, (short) 0, fromArray, fromArrayOffset);
-            }
-            initialize(sign, mag, this.bnh);
-        }
-
-        /**
-         * Clone value into this Integer from other Integer. Updates size of integer.
-         * @param other other integer to copy from
-         */
-        public void clone(Integer other) {
-            this.sign = other.getSign();
-            this.magnitude.copy(other.getMagnitude());
-        }
-
-        /**
-         * set this integer to zero
-         */
-        public void zero() {
-            this.sign = (short) 0;
-            this.magnitude.zero();
-        }
-
-        /**
-         * Return sign of this integer
-         * @return current sign
-         */
-        public byte getSign() {
-            return this.sign;
-        }
-        /**
-         * Set sign of this integer
-         * @param s new sign
-         */
-        public void setSign(byte s) {
-            this.sign = s;
-        }
-
-        /**
-         * Return length (in bytes) of this integer
-         * @return length of this integer
-         */
-        public short getSize() {
-            return this.magnitude.length();
-        }
-        /**
-         * Set length of this integer
-         * @param newSize new length
-         */
-        public void setSize(short newSize) {
-            this.magnitude.set_size(newSize);
-        }
-
-        /**
-         * Compute negation of this integer
-         */
-        public void negate() {
-            if (this.isPositive()) {
-                this.setSign((byte) 1);
-            } else if (this.isNegative()) {
-                this.setSign((byte) 0);
-            }
-        }
-
-        /**
-         * Returns internal array as byte array. No copy is performed so change of
-         * values in array also changes this integer
-         * @return byte array with magnitude
-         */
-        public byte[] getMagnitude_b() {
-            return this.magnitude.as_byte_array();
-        }
-
-        /**
-         * Returns magnitude as Bignat. No copy is performed so change of Bignat also changes this integer
-         *
-         * @return Bignat representing magnitude
-         */
-        public Bignat getMagnitude() {
-            return this.magnitude;
-        }
-
-        /**
-         * Set magnitude of this integer from other one. Will not change this integer length.
-         * No sign is copied from other.
-         * @param other other integer to copy from
-         */
-        public void setMagnitude(Integer other) {
-            this.magnitude.copy(other.getMagnitude());
-        }
-
-        /**
-         * Serializes this integer value into array. Sign is serialized as first byte
-         * @param outBuffer output array
-         * @param outBufferOffset start offset within output array
-         * @return length of resulting serialized number including sign (number of bytes)
-         */
-        public short toByteArray(byte[] outBuffer, short outBufferOffset) {
-            //Store sign
-            outBuffer[outBufferOffset] = sign;
-            //Store magnitude
-            Util.arrayCopyNonAtomic(this.getMagnitude_b(), (short) 0, outBuffer, (short) (outBufferOffset + 1), this.getSize());
-            return (short) (this.getSize() + 1);
-        }
-
-        /**
-         * Deserialize value of this integer from provided array including sign.
-         * Sign is expected to be as first byte
-         * @param value array with value
-         * @param valueOffset start offset within value
-         * @param valueLength length of value
-         */
-        public void fromByteArray(byte[] value, short valueOffset, short valueLength) {
-            //Store sign
-            this.sign = value[valueOffset];
-            //Store magnitude
-            this.magnitude.from_byte_array((short) (valueLength - 1), (short) 0, value, (short) (valueOffset + 1));
-        }
-
-        /**
-         * Return true if integer is negative.
-         * @return true if integer is negative, false otherwise
-         */
-        public boolean isNegative() {
-            return this.sign == 1;
-        }
-
-        /**
-         * Return true if integer is positive.
-         *
-         * @return true if integer is positive, false otherwise
-         */
-        public boolean isPositive() {
-            return this.sign == 0;
-        }
-
-        /**
-         * Compares two integers. Return true, if this is smaller than other.
-         * @param other other integer to compare
-         * @return true, if this is strictly smaller than other. False otherwise.
-         */
-        public boolean lesser(Integer other) {
-            if (this.sign == 1 && other.sign == 0) {
-                return true;
-            } else if (this.sign == 0 && other.sign == 1) {
-                return false;
-            } else if ((this.sign == 0 && other.sign == 0)) {
-                return this.magnitude.lesser(other.magnitude);
-            } else { //if ((this.sign == 1 && other.sign==1))
-                return (!this.magnitude.lesser(other.magnitude));
-            }
-        }
-
-        /**
-         * Add other integer to this and store result into this.
-         * @param other other integer to add
-         */
-        public void add(Integer other) {
-            if (this.isPositive() && other.isPositive()) { //this and other are (+)
-                this.sign = 0;
-                this.magnitude.add(other.magnitude);
-            } else if (this.isNegative() && other.isNegative()) { //this and other are (-)
-                this.sign = 1;
-                this.magnitude.add(other.magnitude);
-            } else {
-                if (this.isPositive() && other.getMagnitude().lesser(this.getMagnitude())) { //this(+) is larger than other(-)
-                    this.sign = 0;
-                    this.magnitude.subtract(other.magnitude);
-                } else if (this.isNegative() && other.getMagnitude().lesser(this.getMagnitude())) { //this(-) has larger magnitude than other(+)
-                    this.sign = 1;
-                    this.magnitude.subtract(other.magnitude);
-                } else if (this.isPositive() && this.getMagnitude().lesser(other.getMagnitude())) { //this(+) has smaller magnitude than other(-)
-                    this.sign = 1;
-                    bnh.fnc_int_add_tmpMag.lock();
-                    bnh.fnc_int_add_tmpMag.clone(other.getMagnitude());
-                    bnh.fnc_int_add_tmpMag.subtract(this.magnitude);
-                    this.magnitude.copy(bnh.fnc_int_add_tmpMag);
-                    bnh.fnc_int_add_tmpMag.unlock();
-                } else if (this.isNegative() && this.getMagnitude().lesser(other.getMagnitude())) {  //this(-) has larger magnitude than other(+)
-                    this.sign = 0;
-                    bnh.fnc_int_add_tmpMag.lock();
-                    bnh.fnc_int_add_tmpMag.clone(other.getMagnitude());
-                    bnh.fnc_int_add_tmpMag.subtract(this.magnitude);
-                    this.magnitude.copy(bnh.fnc_int_add_tmpMag);
-                    bnh.fnc_int_add_tmpMag.unlock();
-                } else if (this.getMagnitude().same_value(other.getMagnitude())) {  //this has opposite sign than other, and the same magnitude
-                    this.sign = 0;
-                    this.zero();
-                }
-            }
-        }
-
-        /**
-         * Substract other integer from this and store result into this.
-         *
-         * @param other other integer to substract
-         */
-        public void subtract(Integer other) {
-            other.negate(); // Potentially problematic - failure and exception in subsequent function will cause other to stay negated
-            this.add(other);
-            // Restore original sign for other
-            other.negate();
-        }
-
-        /**
-         * Multiply this and other integer and store result into this.
-         *
-         * @param other other integer to multiply
-         */
-        public void multiply(Integer other) {
-            if (this.isPositive() && other.isNegative()) {
-                this.setSign((byte) 1);
-            } else if (this.isNegative() && other.isPositive()) {
-                this.setSign((byte) 1);
-            } else {
-                this.setSign((byte) 0);
-            }
-
-            // Make mod BN as maximum value (positive, leading 0x80)
-            bnh.fnc_int_multiply_mod.lock();
-            bnh.fnc_int_multiply_mod.set_size(this.magnitude.length());
-            bnh.fnc_int_multiply_mod.zero();
-            bnh.fnc_int_multiply_mod.as_byte_array()[0] = (byte) 0x80;  // Max INT+1 Value
-
-            bnh.fnc_int_multiply_tmpThis.lock();
-            bnh.fnc_int_multiply_tmpThis.set_size(this.magnitude.length());
-            bnh.fnc_int_multiply_tmpThis.mod_mult(this.getMagnitude(), other.getMagnitude(), bnh.fnc_int_multiply_mod);
-            this.magnitude.copy(bnh.fnc_int_multiply_tmpThis);
-            bnh.fnc_int_multiply_mod.unlock();
-            bnh.fnc_int_multiply_tmpThis.unlock();
-        }
-
-        /**
-         * Divide this by other integer and store result into this.
-         *
-         * @param other divisor
-         */
-        public void divide(Integer other) {
-            if (this.isPositive() && other.isNegative()) {
-                this.setSign((byte) 1);
-            } else if (this.isNegative() && other.isPositive()) {
-                this.setSign((byte) 1);
-            } else {
-                this.setSign((byte) 0);
-            }
-
-            bnh.fnc_int_divide_tmpThis.lock();
-            bnh.fnc_int_divide_tmpThis.clone(this.magnitude);
-            bnh.fnc_int_divide_tmpThis.remainder_divide(other.getMagnitude(), this.magnitude);
-            bnh.fnc_int_divide_tmpThis.unlock();
-        }
-
-        /**
-         * Computes modulo of this by other integer and store result into this.
-         *
-         * @param other modulus
-         */
-        public void modulo(Integer other) {
-            this.magnitude.mod(other.getMagnitude());
-        }
     }
 
     /**
-     *
-     * @author Petr Svenda
+     * Credits: Based on Bignat library from OV-chip project https://ovchip.cs.ru.nl/OV-chip_2.0 by Radboud University Nijmegen
      */
-    static class ResourceManager {
+    public static class BigNat {
+        // Threshold bit length of mult operand to invoke RSA trick
+        public static final short FAST_MULT_VIA_RSA_THRESHOLD_LENGTH = (short) 16;
+
+        private final ResourceManager rm;
         /**
-         * Object responsible for logical locking and unlocking of shared arrays and
-         * objects
-         */
-        public ObjectLocker locker = null;
-        /**
-         * Object responsible for easy management of target placement (RAM/EEPROM)
-         * fro allocated objects
-         */
-        public ObjectAllocator memAlloc = null;
-
-
-
-        // Allocated arrays
-        byte[] helper_BN_array1 = null;
-        byte[] helper_BN_array2 = null;
-        byte[] helper_uncompressed_point_arr1 = null;
-        byte[] helper_uncompressed_point_arr2 = null;
-        byte[] helper_hashArray = null;
-        /**
-         * Number of pre-allocated helper arrays
-         */
-        public static final byte NUM_HELPER_ARRAYS = 4;
-
-        MessageDigest hashEngine;
-        public static final byte NUM_SHARED_HELPER_OBJECTS = 1;
-
-
-        // These Bignats helper_BN_? are allocated
-        Bignat helper_BN_A;
-        Bignat helper_BN_B;
-        Bignat helper_BN_C;
-        Bignat helper_BN_D;
-        Bignat helper_BN_E;
-        Bignat helper_BN_F;
-        Bignat helper_BN_G;
-
-        // These Bignats helperEC_BN_? are allocated
-        Bignat helperEC_BN_A;
-        Bignat helperEC_BN_B;
-        Bignat helperEC_BN_C;
-        Bignat helperEC_BN_D;
-        Bignat helperEC_BN_E;
-        Bignat helperEC_BN_F;
-
-        public void initialize(short MAX_POINT_SIZE, short MAX_COORD_SIZE, short MAX_BIGNAT_SIZE, short MULT_RSA_ENGINE_MAX_LENGTH_BITS, Bignat_Helper bnh) {
-            // Allocate long-term helper values
-            locker = new ObjectLocker((short) (NUM_HELPER_ARRAYS + NUM_SHARED_HELPER_OBJECTS));
-            //locker.setLockingActive(false); // if required, locking can be disabled
-            memAlloc = new ObjectAllocator();
-            memAlloc.setAllAllocatorsRAM();
-            //if required, memory for helper objects and arrays can be in persistent memory to save RAM (or some tradeoff)
-            //ObjectAllocator.setAllAllocatorsEEPROM();  //ObjectAllocator.setAllocatorsTradeoff();
-
-
-            // Multiplication speedup engines and arrays used by Bignat.mult_RSATrick()
-            helper_BN_array1 = memAlloc.allocateByteArray((short) (MULT_RSA_ENGINE_MAX_LENGTH_BITS / 8), memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_array1));
-            locker.registerLock(helper_BN_array1);
-            helper_BN_array2 = memAlloc.allocateByteArray((short) (MULT_RSA_ENGINE_MAX_LENGTH_BITS / 8), memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_array2));
-            locker.registerLock(helper_BN_array2);
-            helper_uncompressed_point_arr1 = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.ECPH_uncompressed_point_arr1));
-            locker.registerLock(helper_uncompressed_point_arr1);
-            helper_uncompressed_point_arr2 = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.ECPH_uncompressed_point_arr2));
-            locker.registerLock(helper_uncompressed_point_arr2);
-            hashEngine = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
-            helper_hashArray = memAlloc.allocateByteArray(hashEngine.getLength(), memAlloc.getAllocatorType(ObjectAllocator.ECPH_hashArray));
-            locker.registerLock(helper_hashArray);
-            //locker.registerLock(hashEngine); // register hash engine to slightly speedup search for locked objects (hash engine used less frequently)
-
-
-            helper_BN_A = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_A), bnh);
-            helper_BN_B = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_B), bnh);
-            helper_BN_C = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_C), bnh);
-            helper_BN_D = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_D), bnh);
-            helper_BN_E = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_E), bnh);
-            helper_BN_F = new Bignat((short) (MAX_BIGNAT_SIZE + 2), memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_F), bnh); // +2 is to correct for infrequent RSA result with two or more leading zeroes
-            helper_BN_G = new Bignat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BNH_helper_BN_G), bnh);
-
-            helperEC_BN_A = new Bignat(MAX_POINT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_A), bnh);
-            helperEC_BN_B = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_B), bnh);
-            helperEC_BN_C = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_C), bnh);
-            helperEC_BN_D = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_D), bnh);
-            helperEC_BN_E = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_E), bnh);
-            helperEC_BN_F = new Bignat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.ECPH_helperEC_BN_F), bnh);
-
-
-        }
-
-        /**
-         * Erase all values stored in helper objects
-         */
-        void erase() {
-            helper_BN_A.erase();
-            helper_BN_B.erase();
-            helper_BN_C.erase();
-            helper_BN_D.erase();
-            helper_BN_E.erase();
-            helper_BN_F.erase();
-
-            helperEC_BN_A.erase();
-            helperEC_BN_B.erase();
-            helperEC_BN_C.erase();
-            helperEC_BN_D.erase();
-            helperEC_BN_E.erase();
-            helperEC_BN_F.erase();
-
-
-            Util.arrayFillNonAtomic(helper_BN_array1, (short) 0, (short) helper_BN_array1.length, (byte) 0);
-            Util.arrayFillNonAtomic(helper_BN_array2, (short) 0, (short) helper_BN_array2.length, (byte) 0);
-            Util.arrayFillNonAtomic(helper_uncompressed_point_arr1, (short) 0, (short) helper_uncompressed_point_arr1.length, (byte) 0);
-            Util.arrayFillNonAtomic(helper_uncompressed_point_arr2, (short) 0, (short) helper_uncompressed_point_arr2.length, (byte) 0);
-        }
-
-        /**
-         * Unlocks all helper objects
-         */
-        public void unlockAll() {
-            if (helper_BN_A.isLocked()) {
-                helper_BN_A.unlock();
-            }
-            if (helper_BN_B.isLocked()) {
-                helper_BN_B.unlock();
-            }
-            if (helper_BN_C.isLocked()) {
-                helper_BN_C.unlock();
-            }
-            if (helper_BN_D.isLocked()) {
-                helper_BN_D.unlock();
-            }
-            if (helper_BN_E.isLocked()) {
-                helper_BN_E.unlock();
-            }
-            if (helper_BN_F.isLocked()) {
-                helper_BN_F.unlock();
-            }
-
-            if (helperEC_BN_A.isLocked()) {
-                helperEC_BN_A.unlock();
-            }
-            if (helperEC_BN_B.isLocked()) {
-                helperEC_BN_B.unlock();
-            }
-            if (helperEC_BN_C.isLocked()) {
-                helperEC_BN_C.unlock();
-            }
-            if (helperEC_BN_D.isLocked()) {
-                helperEC_BN_D.unlock();
-            }
-            if (helperEC_BN_E.isLocked()) {
-                helperEC_BN_E.unlock();
-            }
-            if (helperEC_BN_F.isLocked()) {
-                helperEC_BN_F.unlock();
-            }
-            if (locker.isLocked(helper_uncompressed_point_arr1)) {
-                locker.unlock(helper_uncompressed_point_arr1);
-            }
-            if (locker.isLocked(helper_uncompressed_point_arr2)) {
-                locker.unlock(helper_uncompressed_point_arr2);
-            }
-            if (locker.isLocked(helper_hashArray)) {
-                locker.unlock(helper_hashArray);
-            }
-
-        }
-    }
-
-    public static class SecP256k1 {
-
-        public final static short KEY_LENGTH = 256; // Bits
-        public final static short POINT_SIZE = 65; // Bytes
-        public final static short COORD_SIZE = 32; // Bytes
-
-        public final static byte[] p = {
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
-                (byte) 0xff, (byte) 0xff, (byte) 0xfc, (byte) 0x2f
-        };
-
-        public final static byte[] a = {
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00
-        };
-
-        public final static byte[] b = {
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
-                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x07
-        };
-
-        public final static byte[] G = {
-                (byte) 0x04,
-                (byte) 0x79, (byte) 0xbe, (byte) 0x66, (byte) 0x7e,
-                (byte) 0xf9, (byte) 0xdc, (byte) 0xbb, (byte) 0xac,
-                (byte) 0x55, (byte) 0xa0, (byte) 0x62, (byte) 0x95,
-                (byte) 0xce, (byte) 0x87, (byte) 0x0b, (byte) 0x07,
-                (byte) 0x02, (byte) 0x9b, (byte) 0xfc, (byte) 0xdb,
-                (byte) 0x2d, (byte) 0xce, (byte) 0x28, (byte) 0xd9,
-                (byte) 0x59, (byte) 0xf2, (byte) 0x81, (byte) 0x5b,
-                (byte) 0x16, (byte) 0xf8, (byte) 0x17, (byte) 0x98,
-                (byte) 0x48, (byte) 0x3a, (byte) 0xda, (byte) 0x77,
-                (byte) 0x26, (byte) 0xa3, (byte) 0xc4, (byte) 0x65,
-                (byte) 0x5d, (byte) 0xa4, (byte) 0xfb, (byte) 0xfc,
-                (byte) 0x0e, (byte) 0x11, (byte) 0x08, (byte) 0xa8,
-                (byte) 0xfd, (byte) 0x17, (byte) 0xb4, (byte) 0x48,
-                (byte) 0xa6, (byte) 0x85, (byte) 0x54, (byte) 0x19,
-                (byte) 0x9c, (byte) 0x47, (byte) 0xd0, (byte) 0x8f,
-                (byte) 0xfb, (byte) 0x10, (byte) 0xd4, (byte) 0xb8
-        };
-
-        public final static byte[] r = {
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
-                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
-                (byte) 0xba, (byte) 0xae, (byte) 0xdc, (byte) 0xe6,
-                (byte) 0xaf, (byte) 0x48, (byte) 0xa0, (byte) 0x3b,
-                (byte) 0xbf, (byte) 0xd2, (byte) 0x5e, (byte) 0x8c,
-                (byte) 0xd0, (byte) 0x36, (byte) 0x41, (byte) 0x41,
-        };
-    }
-
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class Bignat {
-        private final Bignat_Helper bnh;
-        /**
-         * Configuration flag controlling re-allocation of internal array. If true, internal Bignat buffer can be enlarged during clone
+         * Configuration flag controlling re-allocation of internal array. If true, internal BigNat buffer can be enlarged during clone
          * operation if required (keep false to prevent slow reallocations)
          */
         boolean ALLOW_RUNTIME_REALLOCATION = false;
 
         /**
-         * Configuration flag controlling clearing of shared Bignats on lock as prevention of unwanted leak of sensitive information from previous operation.
-         * If true, internal storage array is erased once Bignat is locked for use
-         */
-        boolean ERASE_ON_LOCK = false;
-        /**
-         * Configuration flag controlling clearing of shared Bignats on unlock as
-         * prevention of unwanted leak of sensitive information to next operation.
-         * If true, internal storage array is erased once Bignat is unlocked from use
-         */
-        boolean ERASE_ON_UNLOCK = false;
-
-        /**
          * Factor for converting digit size into short length. 1 for the short/short
          * converting, 4 for the int/long configuration.
-         *
          */
         public static final short size_multiplier = 1;
 
@@ -1562,7 +981,6 @@ public class jcmathlib {
         /**
          * Bitmask for the highest bit in a digit. short 0x80 for the short/short
          * configuration, long 0x80000000 for the int/long configuration.
-         *
          */
         public static final short digit_first_bit_mask = 0x80;
 
@@ -1570,7 +988,6 @@ public class jcmathlib {
          * Bitmask for the second highest bit in a digit. short 0x40 for the
          * short/short configuration, long 0x40000000 for the int/long
          * configuration.
-         *
          */
         public static final short digit_second_bit_mask = 0x40;
 
@@ -1578,7 +995,6 @@ public class jcmathlib {
          * Bitmask for the two highest bits in a digit. short 0xC0 for the
          * short/short configuration, long 0xC0000000 for the int/long
          * configuration.
-         *
          */
         public static final short digit_first_two_bit_mask = 0xC0;
 
@@ -1631,21 +1047,21 @@ public class jcmathlib {
         private short max_size = -1; // Maximum size of this Bignat. Corresponds to value.length
         private byte allocatorType = JCSystem.MEMORY_TYPE_PERSISTENT; // Memory storage type for value buffer
 
-        private boolean bLocked = false;    // Logical flag to store info if this Bignat is currently used for some operation. Used as a prevention of unintentional parallel use of same temporary pre-allocated Bignats.
+        private boolean locked = false;    // Logical flag to store info if this Bignat is currently used for some operation. Used as a prevention of unintentional parallel use of same temporary pre-allocated Bignats.
 
         /**
          * Construct a Bignat of size {@code size} in shorts. Allocated in EEPROM or RAM based on
          * {@code allocatorType}. JCSystem.MEMORY_TYPE_PERSISTENT, in RAM otherwise.
          *
-         * @param size the size of the new Bignat in bytes
+         * @param size          the size of the new Bignat in bytes
          * @param allocatorType type of allocator storage
-         *      JCSystem.MEMORY_TYPE_PERSISTENT => EEPROM (slower writes, but RAM is saved)
-         *      JCSystem.MEMORY_TYPE_TRANSIENT_RESET => RAM
-         *      JCSystem.MEMORY_TYPE_TRANSIENT_DESELECT => RAM
-         * @param bignatHelper {@code Bignat_Helper} class with helper objects
+         *                      JCSystem.MEMORY_TYPE_PERSISTENT => EEPROM (slower writes, but RAM is saved)
+         *                      JCSystem.MEMORY_TYPE_TRANSIENT_RESET => RAM
+         *                      JCSystem.MEMORY_TYPE_TRANSIENT_DESELECT => RAM
+         * @param bignatHelper  {@code Bignat_Helper} class with helper objects
          */
-        public Bignat(short size, byte allocatorType, Bignat_Helper bignatHelper) {
-            this.bnh = bignatHelper;
+        public BigNat(short size, byte allocatorType, ResourceManager rm) {
+            this.rm = rm;
             allocate_storage_array(size, allocatorType);
         }
 
@@ -1653,11 +1069,12 @@ public class jcmathlib {
          * Construct a Bignat with provided array used as internal storage as well as initial value.
          * No copy of array is made. If this Bignat is used in operation which modifies the Bignat value,
          * content of provided array is changed.
-         * @param valueBuffer internal storage
+         *
+         * @param valueBuffer  internal storage
          * @param bignatHelper {@code Bignat_Helper} class with all relevant settings and helper objects
          */
-        public Bignat(byte[] valueBuffer, Bignat_Helper bignatHelper) {
-            this.bnh = bignatHelper;
+        public BigNat(byte[] valueBuffer, ResourceManager rm) {
+            this.rm = rm;
             this.size = (short) valueBuffer.length;
             this.max_size = (short) valueBuffer.length;
             this.allocatorType = -1; // no allocator
@@ -1665,48 +1082,12 @@ public class jcmathlib {
         }
 
         /**
-         * Lock/reserve this bignat for subsequent use.
-         * Used to protect corruption of pre-allocated temporary Bignats used in different,
-         * potentially nested operations. Must be unlocked by {@code unlock()} later on.
-         * @throws SW_ALREADYLOCKED_BIGNAT if already locked (is already in use by other operation)
-         */
-        public void lock() {
-            if (!bLocked) {
-                bLocked = true;
-                if (ERASE_ON_LOCK) {
-                    erase();
-                }
-            }
-            else {
-                // this Bignat is already locked, raise exception (incorrect sequence of locking and unlocking)
-                ISOException.throwIt(ReturnCodes.SW_LOCK_ALREADYLOCKED);
-            }
-        }
-        /**
-         * Unlock/release this bignat from use. Used to protect corruption
-         * of pre-allocated temporary Bignats used in different nested operations.
-         * Must be locked before.
-         *
-         * @throws SW_NOTLOCKED_BIGNAT if was not locked before (inconsistence in lock/unlock sequence)
-         */
-        public void unlock() {
-            if (bLocked) {
-                bLocked = false;
-                if (ERASE_ON_UNLOCK) {
-                    erase();
-                }
-            } else {
-                // this Bignat is not locked, raise exception (incorrect sequence of locking and unlocking)
-                ISOException.throwIt(ReturnCodes.SW_LOCK_NOTLOCKED);
-            }
-        }
-
-        /**
          * Return current state of logical lock of this object
+         *
          * @return true if object is logically locked (reserved), false otherwise
          */
         public boolean isLocked() {
-            return bLocked;
+            return locked;
         }
 
         /**
@@ -1718,15 +1099,16 @@ public class jcmathlib {
          * Current value of this Bignat can be stored in smaller number of bytes.
          * Use {@code getLength()} method to obtain actual size.
          *
-         * @return this bignat as byte array
+         * @return this BigNat as byte array
          */
         public byte[] as_byte_array() {
             return value;
         }
 
         /**
-         * Serialize this Bignat value into a provided buffer
-         * @param buffer target buffer
+         * Serialize this BigNat value into a provided buffer
+         *
+         * @param buffer       target buffer
          * @param bufferOffset start offset in buffer
          * @return number of bytes copied
          */
@@ -1739,7 +1121,7 @@ public class jcmathlib {
         /**
          * Return the size in digits. Provides access to the internal {@link #size}
          * field.
-         * <P>
+         * <p>
          * The return value is adjusted by {@link #set_size}.
          *
          * @return size in digits.
@@ -1749,14 +1131,14 @@ public class jcmathlib {
         }
 
         /**
-         * Sets internal size of Bignat. Previous value are kept so value is either non-destructively trimmed or enlarged.
-         * @param newSize new size of Bignat. Must be in range of [0, max_size] where max_size was provided during object creation
+         * Sets internal size of BigNat. Previous value are kept so value is either non-destructively trimmed or enlarged.
+         *
+         * @param newSize new size of BigNat. Must be in range of [0, max_size] where max_size was provided during object creation
          */
         public void set_size(short newSize) {
             if (newSize < 0 || newSize > max_size) {
                 ISOException.throwIt(ReturnCodes.SW_BIGNAT_RESIZETOLONGER);
-            }
-            else {
+            } else {
                 this.size = newSize;
             }
         }
@@ -1766,7 +1148,7 @@ public class jcmathlib {
          * creation. If required, object is also zeroized
          *
          * @param bZeroize if true, all bytes of internal array are also set to
-         * zero. If false, previous value is kept.
+         *                 zero. If false, previous value is kept.
          */
         public void resize_to_max(boolean bZeroize) {
             set_size(max_size);
@@ -1776,7 +1158,7 @@ public class jcmathlib {
         }
 
         /**
-         * Create Bignat with different number of bytes used. Will cause longer number
+         * Create BigNat with different number of bytes used. Will cause longer number
          * to shrink (loss of the more significant bytes) and shorter to be prepended with zeroes
          *
          * @param new_size new size in bytes
@@ -1791,61 +1173,62 @@ public class jcmathlib {
             }
 
             if (new_size == this.size) {
-                // No need to resize enything, same length
+                return;
             }
-            else {
-                short this_start, other_start, len;
-                bnh.lock(bnh.fnc_deep_resize_tmp);
-                if (this.size >= new_size) {
-                    this_start = (short) (this.size - new_size);
-                    other_start = 0;
-                    len = new_size;
 
-                    // Shrinking/cropping
-                    Util.arrayCopyNonAtomic(value, this_start, bnh.fnc_deep_resize_tmp, (short) 0, len);
-                    Util.arrayCopyNonAtomic(bnh.fnc_deep_resize_tmp, (short) 0, value, (short) 0, len); // Move bytes in item array towards beggining
-                    // Erase rest of allocated array with zeroes (just as sanitization)
-                    short toErase = (short) (this.max_size - new_size);
-                    if (toErase > 0) {
-                        Util.arrayFillNonAtomic(value, new_size, toErase, (byte) 0);
-                    }
-                } else {
-                    this_start = 0;
-                    other_start = (short) (new_size - this.size);
-                    len = this.size;
-                    // Enlarging => Insert zeroes at begging, move bytes in item array towards the end
-                    Util.arrayCopyNonAtomic(value, this_start, bnh.fnc_deep_resize_tmp, (short) 0, len);
-                    // Move bytes in item array towards end
-                    Util.arrayCopyNonAtomic(bnh.fnc_deep_resize_tmp, (short) 0, value, other_start, len);
-                    // Fill begin of array with zeroes (just as sanitization)
-                    if (other_start > 0) {
-                        Util.arrayFillNonAtomic(value, (short) 0, other_start, (byte) 0);
-                    }
+            byte[] tmpBuffer = rm.ARRAY_A;
+            short this_start, other_start, len;
+
+            if (this.size >= new_size) {
+                this_start = (short) (this.size - new_size);
+                other_start = 0;
+                len = new_size;
+
+                // Shrinking/cropping
+                Util.arrayCopyNonAtomic(value, this_start, tmpBuffer, (short) 0, len);
+                Util.arrayCopyNonAtomic(tmpBuffer, (short) 0, value, (short) 0, len); // Move bytes in item array towards beginning
+                // Erase rest of allocated array with zeroes (just as sanitization)
+                short toErase = (short) (this.max_size - new_size);
+                if (toErase > 0) {
+                    Util.arrayFillNonAtomic(value, new_size, toErase, (byte) 0);
                 }
-                bnh.unlock(bnh.fnc_deep_resize_tmp);
-
-                set_size(new_size);
+            } else {
+                this_start = 0;
+                other_start = (short) (new_size - this.size);
+                len = this.size;
+                // Enlarging => Insert zeroes at begging, move bytes in item array towards the end
+                Util.arrayCopyNonAtomic(value, this_start, tmpBuffer, (short) 0, len);
+                // Move bytes in item array towards end
+                Util.arrayCopyNonAtomic(tmpBuffer, (short) 0, value, other_start, len);
+                // Fill begin of array with zeroes (just as sanitization)
+                if (other_start > 0) {
+                    Util.arrayFillNonAtomic(value, (short) 0, other_start, (byte) 0);
+                }
             }
+
+            set_size(new_size);
         }
 
 
         /**
          * Appends zeros in the suffix to reach the defined byte length
          * Essentially multiplies the number with 16 (HEX)
+         *
          * @param targetLength required length including appended zeroes
-         * @param outBuffer output buffer for value with appended zeroes
-         * @param outOffset start offset inside outBuffer for write
+         * @param outBuffer    output buffer for value with appended zeroes
+         * @param outOffset    start offset inside outBuffer for write
          */
         public void append_zeros(short targetLength, byte[] outBuffer, short outOffset) {
             Util.arrayCopyNonAtomic(value, (short) 0, outBuffer, outOffset, this.size); //copy the value
             Util.arrayFillNonAtomic(outBuffer, (short) (outOffset + this.size), (short) (targetLength - this.size), (byte) 0); //append zeros
         }
+
         /**
          * Prepends zeros before the value of this Bignat up to target length.
          *
          * @param targetLength required length including prepended zeroes
-         * @param outBuffer output buffer for value with prepended zeroes
-         * @param outOffset start offset inside outBuffer for write
+         * @param outBuffer    output buffer for value with prepended zeroes
+         * @param outOffset    start offset inside outBuffer for write
          */
         public void prepend_zeros(short targetLength, byte[] outBuffer, short outOffset) {
             short other_start = (short) (targetLength - this.size);
@@ -1866,7 +1249,7 @@ public class jcmathlib {
                 }
             }
 
-            short new_size = (short)(this.size-i);
+            short new_size = (short) (this.size - i);
             if (new_size < 0) {
                 ISOException.throwIt(ReturnCodes.SW_BIGNAT_INVALIDRESIZE);
             }
@@ -1880,6 +1263,7 @@ public class jcmathlib {
         public void zero() {
             Util.arrayFillNonAtomic(value, (short) 0, this.size, (byte) 0);
         }
+
         /**
          * Stores zero in this object for whole internal buffer regardless of current size.
          */
@@ -1903,6 +1287,7 @@ public class jcmathlib {
             this.zero();
             value[(short) (size - 1)] = 1;
         }
+
         /**
          * Stores two in this object. Keeps previous size of this Bignat (2 is
          * prepended with required number of zeroes).
@@ -1912,48 +1297,14 @@ public class jcmathlib {
             value[(short) (size - 1)] = 0x02;
         }
 
+        /**
+         * Stores three in this object. Keeps previous size of this Bignat (3 is
+         * prepended with required number of zeroes).
+         */
         public void three() {
             this.zero();
             value[(short) (size - 1)] = 0x03;
         }
-
-        public void four() {
-            this.zero();
-            value[(short) (size - 1)] = 0x04;
-        }
-
-        public void five() {
-            this.zero();
-            value[(short) (size - 1)] = 0x05;
-        }
-        public void eight() {
-            this.zero();
-            value[(short) (size - 1)] = 0x08;
-        }
-
-        public void ten() {
-            this.zero();
-            value[(short) (size - 1)] = 0x0A;
-        }
-
-        public void twentyfive() {
-            this.zero();
-            value[(short)(size-1)] = 0x19;
-        }
-
-        public void twentyseven() {
-            this.zero();
-            value[(short)(size-1)] = 0x1B;
-        }
-
-        public void athousand() {
-            this.zero();
-            value[(short)(size-2)] = (byte)0x03;
-            value[(short)(size-1)] = (byte)0xE8;
-        }
-
-
-
 
         /**
          * Copies {@code other} into this. No size requirements. If {@code other}
@@ -1962,10 +1313,9 @@ public class jcmathlib {
          * digits are correctly initilized to zero. This function will not change size
          * attribute of this object.
          *
-         * @param other
-         *            Bignat to copy into this object.
+         * @param other Bignat to copy into this object.
          */
-        public void copy(Bignat other) {
+        public void copy(BigNat other) {
             short this_start, other_start, len;
             if (this.size >= other.size) {
                 this_start = (short) (this.size - other.size);
@@ -1976,7 +1326,7 @@ public class jcmathlib {
                 other_start = (short) (other.size - this.size);
                 len = this.size;
                 // Verify here that other have leading zeroes up to other_start
-                for (short i = 0; i < other_start; i ++) {
+                for (short i = 0; i < other_start; i++) {
                     if (other.value[i] != 0) {
                         ISOException.throwIt(ReturnCodes.SW_BIGNAT_INVALIDCOPYOTHER);
                     }
@@ -1995,17 +1345,16 @@ public class jcmathlib {
          * The size attribute (returned by length()) is updated. If {@code other}
          * is longer than maximum capacity of this, internal buffer is reallocated if enabled
          * (ALLOW_RUNTIME_REALLOCATION), otherwise exception is thrown.
-         * @param other
-         *            Bignat to clone into this object.
+         *
+         * @param other Bignat to clone into this object.
          */
-        public void clone(Bignat other) {
+        public void clone(BigNat other) {
             // Reallocate array only if current array cannot store the other value and reallocation is enabled by ALLOW_RUNTIME_REALLOCATION
             if (this.max_size < other.length()) {
                 // Reallocation necessary
                 if (ALLOW_RUNTIME_REALLOCATION) {
                     allocate_storage_array(other.length(), this.allocatorType);
-                }
-                else {
+                } else {
                     ISOException.throwIt(ReturnCodes.SW_BIGNAT_REALLOCATIONNOTALLOWED);
                 }
             }
@@ -2022,43 +1371,39 @@ public class jcmathlib {
          * Equality check. Requires that this object and other have the same size or are padded with zeroes.
          * Returns true if all digits (except for leading zeroes) are equal.
          *
-         *
-         * @param other Bignat to compare
+         * @param other BigNat to compare
          * @return true if this and other have the same value, false otherwise.
          */
-        public boolean same_value(Bignat other) {
+        public boolean same_value(BigNat other) {
             short hashLen;
+            byte[] tmpBuffer = rm.ARRAY_A;
+            byte[] hashBuffer = rm.ARRAY_B;
+
             // Compare using hash engine
             // The comparison is made with hash of point values instead of directly values.
             // This way, offset of first mismatching byte is not leaked via timing side-channel.
-            bnh.lock(bnh.fnc_same_value_array1);
-            bnh.lock(bnh.fnc_same_value_hash);
             if (this.length() == other.length()) {
                 // Same length, we can hash directly from BN values
-                bnh.hashEngine.doFinal(this.value, (short) 0, this.length(), bnh.fnc_same_value_hash, (short) 0);
-                hashLen = bnh.hashEngine.doFinal(other.value, (short) 0, other.length(), bnh.fnc_same_value_array1, (short) 0);
-            }
-            else {
+                rm.hashEngine.doFinal(this.value, (short) 0, this.length(), hashBuffer, (short) 0);
+                hashLen = rm.hashEngine.doFinal(other.value, (short) 0, other.length(), tmpBuffer, (short) 0);
+            } else {
                 // Different length of bignats - can be still same if prepended with zeroes
                 // Find the length of longer one and padd other one with starting zeroes
                 if (this.length() < other.length()) {
-                    this.prepend_zeros(other.length(), bnh.fnc_same_value_array1, (short) 0);
-                    bnh.hashEngine.doFinal(bnh.fnc_same_value_array1, (short) 0, other.length(), bnh.fnc_same_value_hash, (short) 0);
-                    hashLen = bnh.hashEngine.doFinal(other.value, (short) 0, other.length(), bnh.fnc_same_value_array1, (short) 0);
-                }
-                else {
-                    other.prepend_zeros(this.length(), bnh.fnc_same_value_array1, (short) 0);
-                    bnh.hashEngine.doFinal(bnh.fnc_same_value_array1, (short) 0, this.length(), bnh.fnc_same_value_hash, (short) 0);
-                    hashLen = bnh.hashEngine.doFinal(this.value, (short) 0, this.length(), bnh.fnc_same_value_array1, (short) 0);
+                    this.prepend_zeros(other.length(), tmpBuffer, (short) 0);
+                    rm.hashEngine.doFinal(tmpBuffer, (short) 0, other.length(), hashBuffer, (short) 0);
+                    hashLen = rm.hashEngine.doFinal(other.value, (short) 0, other.length(), tmpBuffer, (short) 0);
+                } else {
+                    other.prepend_zeros(this.length(), tmpBuffer, (short) 0);
+                    rm.hashEngine.doFinal(tmpBuffer, (short) 0, this.length(), hashBuffer, (short) 0);
+                    hashLen = rm.hashEngine.doFinal(this.value, (short) 0, this.length(), tmpBuffer, (short) 0);
                 }
             }
 
-            boolean bResult = Util.arrayCompare(bnh.fnc_same_value_hash, (short) 0, bnh.fnc_same_value_array1, (short) 0, hashLen) == 0;
+            boolean result = Util.arrayCompare(hashBuffer, (short) 0, tmpBuffer, (short) 0, hashLen) == 0;
 
-            bnh.unlock(bnh.fnc_same_value_array1);
-            bnh.unlock(bnh.fnc_same_value_hash);
 
-            return bResult;
+            return result;
         }
 
 
@@ -2071,10 +1416,10 @@ public class jcmathlib {
          * @param y          array with second bignat
          * @param yOffset    start offset in array of {@code y}
          * @param yLength    length of {@code y}
-         * @return true if carry of most significant byte occurs, false otherwise
+         * @return 0x01 if carry of most significant byte occurs, 0x00 otherwise
          */
-        public static boolean add(byte[] x, short xOffset, short xLength, byte[] y,
-                                  short yOffset, short yLength) {
+        public static byte add(byte[] x, short xOffset, short xLength, byte[] y,
+                               short yOffset, short yLength) {
             short result = 0;
             short i = (short) (xLength + xOffset - 1);
             short j = (short) (yLength + yOffset - 1);
@@ -2092,16 +1437,22 @@ public class jcmathlib {
                 i--;
             }
 
-            return result != 0;
+            // 1. result != 0 => result | -result will have the sign bit set
+            // 2. casting magic to overcome the absence of int
+            // 3. move the sign bit to the rightmost position
+            // 4. discard the sign bit which is present due to the unavoidable casts
+            //    and return the value of the rightmost bit
+            return (byte) ((byte) (((short)(result | -result) & (short)0xFFFF) >>> 15) & 0x01);
         }
 
         /**
          * Subtracts big integer y from x specified by offset and length.
          * The result is stored into x array argument.
-         * @param x array with first bignat
+         *
+         * @param x       array with first bignat
          * @param xOffset start offset in array of {@code x}
          * @param xLength length of {@code x}
-         * @param y array with second bignat
+         * @param y       array with second bignat
          * @param yOffset start offset in array of {@code y}
          * @param yLength length of {@code y}
          * @return true if carry of most significant byte occurs, false otherwise
@@ -2130,39 +1481,37 @@ public class jcmathlib {
 
         /**
          * Substract provided other bignat from this bignat.
+         *
          * @param other bignat to be substracted from this
          */
-        public void subtract(Bignat other) {
+        public void subtract(BigNat other) {
             this.times_minus(other, (short) 0, (short) 1);
         }
 
         /**
          * Scaled subtraction. Subtracts {@code mult * 2^(}{@link #digit_len}
          * {@code  * shift) * other} from this.
-         * <P>
+         * <p>
          * That is, shifts {@code mult * other} precisely {@code shift} digits to
          * the left and subtracts that value from this. {@code mult} must be less
          * than {@link #bignat_base}, that is, it must fit into one digit. It is
          * only declared as short here to avoid negative values.
-         * <P>
+         * <p>
          * {@code mult} has type short.
-         * <P>
+         * <p>
          * No size constraint. However, an assertion is thrown, if the result would
          * be negative. {@code other} can have more digits than this object, but
          * then sufficiently many leading digits must be zero to avoid the
          * underflow.
-         * <P>
+         * <p>
          * Used in division.
          *
-         * @param other
-         *            Bignat to subtract from this object
-         * @param shift
-         *            number of digits to shift {@code other} to the left
-         * @param mult
-         *            of type short, multiple of {@code other} to subtract from this
-         *            object. Must be below {@link #bignat_base}.
+         * @param other Bignat to subtract from this object
+         * @param shift number of digits to shift {@code other} to the left
+         * @param mult  of type short, multiple of {@code other} to subtract from this
+         *              object. Must be below {@link #bignat_base}.
          */
-        public void times_minus(Bignat other, short shift, short mult) {
+        public void times_minus(BigNat other, short shift, short mult) {
             short akku = 0;
             short subtraction_result;
             short i = (short) (this.size - 1 - shift);
@@ -2191,7 +1540,7 @@ public class jcmathlib {
         }
 
         /**
-         * Quick function for decrement of this bignat value by 1. Faster than {@code substract(Bignat.one())}
+         * Quick function for decrement of this BigNat value by 1. Faster than {@code substract(BigNat.one())}
          */
         public void decrement_one() {
             short tmp = 0;
@@ -2200,12 +1549,12 @@ public class jcmathlib {
                 this.value[i] = (byte) (tmp - 1);
                 if (tmp != 0) {
                     break; // CTO
-                }
-                else {
+                } else {
                     // need to modify also one byte up, continue with cycle
                 }
             }
         }
+
         /**
          * Quick function for increment of this bignat value by 1. Faster than
          * {@code add(Bignat.one())}
@@ -2225,15 +1574,14 @@ public class jcmathlib {
 
         /**
          * Index of the most significant 1 bit.
-         * <P>
+         * <p>
          * {@code x} has type short.
-         * <P>
+         * <p>
          * Utility method, used in division.
          *
-         * @param x
-         *            of type short
+         * @param x of type short
          * @return index of the most significant 1 bit in {@code x}, returns
-         *         {@link #double_digit_len} for {@code x == 0}.
+         * {@link #double_digit_len} for {@code x == 0}.
          */
         private static short highest_bit(short x) {
             for (short i = 0; i < double_digit_len; i++) {
@@ -2249,18 +1597,13 @@ public class jcmathlib {
          * Shift to the left and fill. Takes {@code high} {@code middle} {@code low}
          * as 4 digits, shifts them {@code shift} bits to the left and returns the
          * most significant {@link #double_digit_len} bits.
-         * <P>
+         * <p>
          * Utility method, used in division.
          *
-         *
-         * @param high
-         *            of type short, most significant {@link #double_digit_len} bits
-         * @param middle
-         *            of type byte, middle {@link #digit_len} bits
-         * @param low
-         *            of type byte, least significant {@link #digit_len} bits
-         * @param shift
-         *            amount of left shift
+         * @param high   of type short, most significant {@link #double_digit_len} bits
+         * @param middle of type byte, middle {@link #digit_len} bits
+         * @param low    of type byte, least significant {@link #digit_len} bits
+         * @param shift  amount of left shift
          * @return most significant {@link #double_digit_len} as short
          */
         private static short shift_bits(short high, byte middle, byte low,
@@ -2274,8 +1617,7 @@ public class jcmathlib {
             short bits = (short) ((short) (middle & mask) & digit_mask);
             if (shift > digit_len) {
                 bits <<= shift - digit_len;
-            }
-            else {
+            } else {
                 bits >>>= digit_len - shift;
             }
             high |= bits;
@@ -2297,8 +1639,8 @@ public class jcmathlib {
          * {@link #digit_len} {@code * shift)}. That is, shifts {@code other}
          * {@code shift} digits to the left and compares then. This bignat and
          * {@code other} will not be modified inside this method.
-         * <P>
-         *
+         * <p>
+         * <p>
          * As optimization {@code start} can be greater than zero to skip the first
          * {@code start} digits in the comparison. These first digits must be zero
          * then, otherwise an assertion is thrown. (So the optimization takes only
@@ -2306,16 +1648,13 @@ public class jcmathlib {
          * href="../../../overview-summary.html#NO_CARD_ASSERT">NO_CARD_ASSERT</a>
          * is defined.)
          *
-         * @param other
-         *            Bignat to compare to
-         * @param shift
-         *            left shift of other before the comparison
-         * @param start
-         *            digits to skip at the beginning
+         * @param other Bignat to compare to
+         * @param shift left shift of other before the comparison
+         * @param start digits to skip at the beginning
          * @return true if this number is strictly less than the shifted
-         *         {@code other}, false otherwise.
+         * {@code other}, false otherwise.
          */
-        public boolean shift_lesser(Bignat other, short shift, short start) {
+        public boolean shift_lesser(BigNat other, short shift, short start) {
             short j;
 
             j = (short) (other.size + shift - this.size + start);
@@ -2324,8 +1663,7 @@ public class jcmathlib {
                 this_short = (short) (this.value[i] & digit_mask);
                 if (j >= 0 && j < other.size) {
                     other_short = (short) (other.value[j] & digit_mask);
-                }
-                else {
+                } else {
                     other_short = 0;
                 }
                 if (this_short < other_short) {
@@ -2338,50 +1676,15 @@ public class jcmathlib {
             return false;
         }
 
-        /**
-         * Compares this and other bignat.
-         * @param other other value to compare with
-         * @return true if this bignat is smaller, false if bigger or equal
-         */
-        public boolean smaller(Bignat other) {
-            short index_this = 0;
-            for (short i = 0; i < this.length(); i++) {
-                if (this.value[i] != 0x00) {
-                    index_this = i;
-                }
-            }
-
-            short index_other = 0;
-            for (short i = 0; i < other.length(); i++) {
-                if (other.value[i] != 0x00) {
-                    index_other = i;
-                }
-            }
-
-            if ((short) (this.length() - index_this) < (short) (other.length() - index_other)) {
-                return true; // CTO
-            }
-            short i = 0;
-            while (i < this.length() && i < other.length()) {
-                if (((short) (this.value[i] & digit_mask)) < ((short) (other.value[i] & digit_mask))) {
-                    return true; // CTO
-                }
-                i = (short) (1 + i);
-            }
-
-            return false;
-        }
-
 
         /**
          * Comparison of this and other.
          *
-         * @param other
-         *            Bignat to compare with
+         * @param other Bignat to compare with
          * @return true if this number is strictly lesser than {@code other}, false
-         *         otherwise.
+         * otherwise.
          */
-        public boolean lesser(Bignat other) {
+        public boolean lesser(BigNat other) {
             return this.shift_lesser(other, (short) 0, (short) 0);
         }
 
@@ -2399,9 +1702,10 @@ public class jcmathlib {
             return true;
         }
 
-        /** Check if stored bignat is odd.
+        /**
+         * Check if stored bignat is odd.
          *
-         * @return  true if odd, false if even
+         * @return true if odd, false if even
          */
         public boolean is_odd() {
             if ((value[(short) (this.size - 1)] & 1) == 0) {
@@ -2414,21 +1718,19 @@ public class jcmathlib {
          * Remainder and Quotient. Divide this number by {@code divisor} and store
          * the remainder in this. If {@code quotient} is non-null store the quotient
          * there.
-         * <P>
+         * <p>
          * There are no direct size constraints, but if {@code quotient} is
          * non-null, it must be big enough for the quotient, otherwise an assertion
          * is thrown.
-         * <P>
+         * <p>
          * Uses schoolbook division inside and has O^2 complexity in the difference
          * of significant digits of the divident (in this number) and the divisor.
          * For numbers of equal size complexity is linear.
          *
-         * @param divisor
-         *            must be non-zero
-         * @param quotient
-         *            gets the quotient if non-null
+         * @param divisor  must be non-zero
+         * @param quotient gets the quotient if non-null
          */
-        public void remainder_divide(Bignat divisor, Bignat quotient) {
+        public void remainder_divide(BigNat divisor, BigNat quotient) {
             // There are some size requirements, namely that quotient must
             // be big enough. However, this depends on the value of the
             // divisor and is therefore not stated here.
@@ -2593,11 +1895,12 @@ public class jcmathlib {
 
         /**
          * Add short value to this bignat
+         *
          * @param other short value to add
          */
         public void add(short other) {
-            Util.setShort(bnh.tmp_array_short, (short) 0, other); // serialize other into array
-            this.add_carry(bnh.tmp_array_short, (short) 0, (short) 2); // add as array
+            Util.setShort(rm.RAM_WORD, (short) 0, other); // serialize other into array
+            this.add_carry(rm.RAM_WORD, (short) 0, (short) 2); // add as array
         }
 
         /**
@@ -2608,20 +1911,19 @@ public class jcmathlib {
          * {@code 2^(}{@link #digit_len}{@code * }{@link #size this.size}{@code )}),
          * i.e., only one leading 1 bit is missing. If there is no overflow the
          * method will return false.
-         * <P>
-         *
+         * <p>
+         * <p>
          * It would be more natural to report the overflow with an
          * {@link javacard.framework.UserException}, however its
          * {@link javacard.framework.UserException#throwIt throwIt} method dies with
          * a null pointer exception when it runs in a host test frame...
-         * <P>
-         *
+         * <p>
+         * <p>
          * Asserts that the size of other is not greater than the size of this.
          *
-         * @param other
-         *            Bignat to add
+         * @param other       Bignat to add
          * @param otherOffset start offset within other buffer
-         * @param otherLen length of other
+         * @param otherLen    length of other
          * @return true if carry occurs, false otherwise
          */
         public boolean add_carry(byte[] other, short otherOffset, short otherLen) {
@@ -2643,131 +1945,106 @@ public class jcmathlib {
 
             return akku != 0;
         }
+
         /**
          * Add with carry. See {@code add_cary()} for full description
+         *
          * @param other value to be added
          * @return true if carry happens, false otherwise
          */
-        public boolean add_carry(Bignat other) {
+        public boolean add_carry(BigNat other) {
             return add_carry(other.value, (short) 0, other.size);
         }
 
 
         /**
          * Addition. Adds other to this number.
-         * <P>
+         * <p>
          * Same as {@link #times_add times_add}{@code (other, 1)} but without the
          * multiplication overhead.
-         * <P>
+         * <p>
          * Asserts that the size of other is not greater than the size of this.
          *
-         * @param other
-         *            Bignat to add
+         * @param other Bignat to add
          */
-        public void add(Bignat other) {
+        public void add(BigNat other) {
             add_carry(other);
         }
 
         /**
          * Add other bignat to this bignat modulo {@code modulo} value.
-         * @param other value to add
+         *
+         * @param other  value to add
          * @param modulo value of modulo to compute
          */
-        public void mod_add(Bignat other, Bignat modulo) {
+        public void mod_add(BigNat other, BigNat modulo) {
+            BigNat tmp = rm.BN_A;
+
             short tmp_size = this.size;
             if (tmp_size < other.size) {
                 tmp_size = other.size;
             }
             tmp_size++;
-            bnh.fnc_mod_add_tmp.lock();
-            bnh.fnc_mod_add_tmp.set_size(tmp_size);
-            bnh.fnc_mod_add_tmp.zero();
-            bnh.fnc_mod_add_tmp.copy(this);
-            bnh.fnc_mod_add_tmp.add(other);
-            bnh.fnc_mod_add_tmp.mod(modulo);
-            bnh.fnc_mod_add_tmp.shrink();
-            this.clone(bnh.fnc_mod_add_tmp);
-            bnh.fnc_mod_add_tmp.unlock();
+            tmp.set_size(tmp_size);
+            tmp.zero();
+            tmp.copy(this);
+            tmp.add(other);
+            tmp.mod(modulo);
+            tmp.shrink();
+            this.clone(tmp);
         }
 
         /**
-         * Substract other bignat from this bignat modulo {@code modulo} value.
+         * Subtract other BigNat from this BigNat modulo {@code modulo} value.
          *
-         * @param other value to substract
+         * @param other  value to substract
          * @param modulo value of modulo to apply
          */
-        public void mod_sub(Bignat other, Bignat modulo) {
+        public void mod_sub(BigNat other, BigNat modulo) {
+            BigNat tmp = rm.BN_B;
+            BigNat tmpOther = rm.BN_C;
+            BigNat tmpThis = rm.BN_A;
+
             if (other.lesser(this)) { // CTO
                 this.subtract(other);
                 this.mod(modulo);
             } else { //other>this (mod-other+this)
-                bnh.fnc_mod_sub_tmpOther.lock();
-                bnh.fnc_mod_sub_tmpOther.clone(other);
-                bnh.fnc_mod_sub_tmpOther.mod(modulo);
+                tmpOther.clone(other);
+                tmpOther.mod(modulo);
 
                 //fnc_mod_sub_tmpThis = new Bignat(this.length());
-                bnh.fnc_mod_sub_tmpThis.lock();
-                bnh.fnc_mod_sub_tmpThis.clone(this);
-                bnh.fnc_mod_sub_tmpThis.mod(modulo);
+                tmpThis.clone(this);
+                tmpThis.mod(modulo);
 
-                bnh.fnc_mod_sub_tmp.lock();
-                bnh.fnc_mod_sub_tmp.clone(modulo);
-                bnh.fnc_mod_sub_tmp.subtract(bnh.fnc_mod_sub_tmpOther);
-                bnh.fnc_mod_sub_tmpOther.unlock();
-                bnh.fnc_mod_sub_tmp.add(bnh.fnc_mod_sub_tmpThis); //this will never overflow as "other" is larger than "this"
-                bnh.fnc_mod_sub_tmpThis.unlock();
-                bnh.fnc_mod_sub_tmp.mod(modulo);
-                bnh.fnc_mod_sub_tmp.shrink();
-                this.clone(bnh.fnc_mod_sub_tmp);
-                bnh.fnc_mod_sub_tmp.unlock();
+                tmp.clone(modulo);
+                tmp.subtract(tmpOther);
+                tmp.add(tmpThis); //this will never overflow as "other" is larger than "this"
+                tmp.mod(modulo);
+                tmp.shrink();
+                this.clone(tmp);
             }
         }
 
-
-        /**
-         * Scaled addition. Add {@code mult * other} to this number. {@code mult}
-         * must be below {@link #bignat_base}, that is, it must fit into one digit.
-         * It is only declared as a short here to avoid negative numbers.
-         * <P>
-         * Asserts (overly restrictive) that this and other have the same size.
-         * <P>
-         * Same as {@link #times_add_shift times_add_shift}{@code (other, 0, mult)}
-         * but without the shift overhead.
-         * <P>
-         * Used in multiplication.
-         *
-         * @param other Bignat to add
-         * @param mult of short, factor to multiply {@code other} with before
-         * addition. Must be less than {@link #bignat_base}.
-         */
-        public void times_add(Bignat other, short mult) {
-            short akku = 0;
-            for (short i = (short) (size - 1); i >= 0; i--) {
-                akku = (short) (akku + (short) (this.value[i] & digit_mask) + (short) (mult * (other.value[i] & digit_mask)));
-                this.value[i] = (byte) (akku & digit_mask);
-                akku = (short) ((akku >> digit_len) & digit_mask);
-            }
-        }
 
         /**
          * Scaled addition. Adds {@code mult * other * 2^(}{@link #digit_len}
          * {@code * shift)} to this. That is, shifts other {@code shift} digits to
          * the left, multiplies it with {@code mult} and adds then.
-         * <P>
+         * <p>
          * {@code mult} must be less than {@link #bignat_base}, that is, it must fit
          * into one digit. It is only declared as a short here to avoid negative
          * numbers.
-         * <P>
+         * <p>
          * Asserts that the size of this is greater than or equal to
          * {@code other.size + shift + 1}.
          *
-         * @param x Bignat to add
-         * @param mult of short, factor to multiply {@code other} with before
-         * addition. Must be less than {@link #bignat_base}.
+         * @param x     Bignat to add
+         * @param mult  of short, factor to multiply {@code other} with before
+         *              addition. Must be less than {@link #bignat_base}.
          * @param shift number of digits to shift {@code other} to the left, before
-         * addition.
+         *              addition.
          */
-        public void times_add_shift(Bignat x, short shift, short mult) {
+        public void times_add_shift(BigNat x, short shift, short mult) {
             short akku = 0;
             short j = (short) (this.size - 1 - shift);
             for (short i = (short) (x.size - 1); i >= 0; i--, j--) {
@@ -2783,74 +2060,26 @@ public class jcmathlib {
         }
 
         /**
-         * Division of this bignat by provided other bignat.
-         * @param other value of divisor
-         */
-        public void divide(Bignat other) {
-            bnh.fnc_divide_tmpThis.lock();
-            bnh.fnc_divide_tmpThis.clone(this);
-            bnh.fnc_divide_tmpThis.remainder_divide(other, this);
-            this.clone(bnh.fnc_divide_tmpThis);
-            bnh.fnc_divide_tmpThis.unlock();
-        }
-
-        /**
-         * Greatest common divisor of this bignat with other bignat. Result is
+         * Greatest common divisor of this BigNat with other BigNat. Result is
          * stored into this.
          *
-         * @param other value of other bignat
+         * @param other value of other BigNat
          */
-        public void gcd(Bignat other) {
-            bnh.fnc_gcd_tmp.lock();
-            bnh.fnc_gcd_tmpOther.lock();
+        public void gcd(BigNat other) {
+            BigNat tmp = rm.BN_A;
+            BigNat tmpOther = rm.BN_B;
 
-            bnh.fnc_gcd_tmpOther.clone(other);
+
+            tmpOther.clone(other);
 
             // TODO: optimise?
             while (!other.is_zero()) {
-                bnh.fnc_gcd_tmp.clone(bnh.fnc_gcd_tmpOther);
-                this.mod(bnh.fnc_gcd_tmpOther);
-                bnh.fnc_gcd_tmpOther.clone(this);
-                this.clone(bnh.fnc_gcd_tmp);
+                tmp.clone(tmpOther);
+                this.mod(tmpOther);
+                tmpOther.clone(this);
+                this.clone(tmp);
             }
 
-            bnh.fnc_gcd_tmp.unlock();
-            bnh.fnc_gcd_tmpOther.unlock();
-        }
-
-        /**
-         * Decides whether the arguments are coprime or not.
-         *
-         * @param a Bignat value
-         * @param b Bignat value
-         * @return true if coprime, false otherwise
-         */
-        public boolean is_coprime(Bignat a, Bignat b) {
-            bnh.fnc_is_coprime_tmp.lock();
-            bnh.fnc_is_coprime_tmp.clone(a);
-
-            bnh.fnc_is_coprime_tmp.gcd(b);
-            return bnh.fnc_is_coprime_tmp.same_value(Bignat_Helper.ONE);
-        }
-
-        /**
-         * Computes base^exp and stores result into this bignat
-         * @param base value of base
-         * @param exp value of exponent
-         */
-        public void exponentiation(Bignat base, Bignat exp) {
-            this.one();
-            bnh.fnc_exponentiation_i.lock();
-            bnh.fnc_exponentiation_i.set_size(exp.length());
-            bnh.fnc_exponentiation_i.zero();
-            bnh.fnc_exponentiation_tmp.lock();
-            bnh.fnc_exponentiation_tmp.set_size((short) (2 * this.length()));
-            for (; bnh.fnc_exponentiation_i.lesser(exp); bnh.fnc_exponentiation_i.increment_one()) {
-                bnh.fnc_exponentiation_tmp.mult(this, base);
-                this.copy(bnh.fnc_exponentiation_tmp);
-            }
-            bnh.fnc_exponentiation_i.unlock();
-            bnh.fnc_exponentiation_tmp.unlock();
         }
 
         /**
@@ -2862,23 +2091,23 @@ public class jcmathlib {
          * @param x first factor
          * @param y second factor
          */
-        public void mult(Bignat x, Bignat y) {
-            if (!OperationSupport.getInstance().RSA_MULT_TRICK || !bnh.FLAG_FAST_MULT_VIA_RSA || x.length() < Bignat_Helper.FAST_MULT_VIA_RSA_TRESHOLD_LENGTH) {
+        public void mult(BigNat x, BigNat y) {
+            if (!OperationSupport.getInstance().RSA_MULT_TRICK || x.length() < FAST_MULT_VIA_RSA_THRESHOLD_LENGTH) {
                 // If simulator or not supported, use slow multiplication
                 // Use slow multiplication also when numbers are small => faster to do in software
                 mult_schoolbook(x, y);
-            }
-            else {
+            } else {
                 mult_rsa_trick(x, y, null, null);
             }
         }
 
         /**
          * Slow schoolbook algorithm for multiplication
+         *
          * @param x first number to multiply
          * @param y second number to multiply
          */
-        public void mult_schoolbook(Bignat x, Bignat y) {
+        public void mult_schoolbook(BigNat x, BigNat y) {
             this.zero(); // important to keep, used in exponentiation()
             for (short i = (short) (y.size - 1); i >= 0; i--) {
                 this.times_add_shift(x, (short) (y.size - 1 - i), (short) (y.value[i] & digit_mask));
@@ -2898,86 +2127,89 @@ public class jcmathlib {
          * Note: if multiplication is used with either x or y argument same repeatedly,
          * [x^2 mod n] or [y^2 mod n] can be precomputed and passed as arguments x_pow_2 or y_pow_2
          *
-         * @param x first value to multiply
-         * @param y second value to multiply
+         * @param x       first value to multiply
+         * @param y       second value to multiply
          * @param x_pow_2 if not null, array with precomputed value x^2 is expected
          * @param y_pow_2 if not null, array with precomputed value y^2 is expected
          */
-        public void mult_rsa_trick(Bignat x, Bignat y, byte[] x_pow_2, byte[] y_pow_2) {
+        public void mult_rsa_trick(BigNat x, BigNat y, byte[] x_pow_2, byte[] y_pow_2) {
             short xOffset;
             short yOffset;
 
-            bnh.lock(bnh.fnc_mult_resultArray1);
+            byte[] resultBuffer1 = rm.ARRAY_A;
+            byte[] resultBuffer2 = rm.ARRAY_B;
+
 
             // x+y
-            Util.arrayFillNonAtomic(bnh.fnc_mult_resultArray1, (short) 0, (short) bnh.fnc_mult_resultArray1.length, (byte) 0);
+            Util.arrayFillNonAtomic(resultBuffer1, (short) 0, (short) resultBuffer1.length, (byte) 0);
             // We must copy bigger number first
             if (x.size > y.size) {
                 // Copy x to the end of mult_resultArray
-                xOffset = (short) (bnh.fnc_mult_resultArray1.length - x.length());
-                Util.arrayCopyNonAtomic(x.value, (short) 0, bnh.fnc_mult_resultArray1, xOffset, x.length());
-                if (add(bnh.fnc_mult_resultArray1, xOffset, x.size, y.value, (short) 0, y.size)) {
-                    xOffset--;
-                    bnh.fnc_mult_resultArray1[xOffset] = 0x01;
-                }
+                xOffset = (short) (resultBuffer1.length - x.length());
+                Util.arrayCopyNonAtomic(x.value, (short) 0, resultBuffer1, xOffset, x.length());
+
+                // modified for CT
+                byte carry = add(resultBuffer1, xOffset, x.size, y.value, (short) 0, y.size);
+                xOffset--;
+                resultBuffer1[xOffset] = carry; // add carry if occured
             } else {
                 // Copy x to the end of mult_resultArray
-                yOffset = (short) (bnh.fnc_mult_resultArray1.length - y.length());
-                Util.arrayCopyNonAtomic(y.value, (short) 0, bnh.fnc_mult_resultArray1, yOffset, y.length());
-                if (add(bnh.fnc_mult_resultArray1, yOffset, y.size, x.value, (short) 0, x.size)) {
-                    yOffset--;
-                    bnh.fnc_mult_resultArray1[yOffset] = 0x01; // add carry if occured
-                }
+                yOffset = (short) (resultBuffer1.length - y.length());
+                Util.arrayCopyNonAtomic(y.value, (short) 0, resultBuffer1, yOffset, y.length());
+
+                // modified for CT
+                byte carry = add(resultBuffer1, yOffset, y.size, x.value, (short) 0, x.size);
+                yOffset--;
+                resultBuffer1[yOffset] = carry; // add carry if occured
             }
 
             // ((x+y)^2)
-            bnh.fnc_mult_cipher.doFinal(bnh.fnc_mult_resultArray1, (byte) 0, (short) bnh.fnc_mult_resultArray1.length, bnh.fnc_mult_resultArray1, (short) 0);
+            rm.multCiph.doFinal(resultBuffer1, (byte) 0, (short) resultBuffer1.length, resultBuffer1, (short) 0);
 
             // x^2
-            bnh.lock(bnh.fnc_mult_resultArray2);
             if (x_pow_2 == null) {
                 // x^2 is not precomputed
-                Util.arrayFillNonAtomic(bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length, (byte) 0);
-                xOffset = (short) (bnh.fnc_mult_resultArray2.length - x.length());
-                Util.arrayCopyNonAtomic(x.value, (short) 0, bnh.fnc_mult_resultArray2, xOffset, x.length());
-                bnh.fnc_mult_cipher.doFinal(bnh.fnc_mult_resultArray2, (byte) 0, (short) bnh.fnc_mult_resultArray2.length, bnh.fnc_mult_resultArray2, (short) 0);
+                Util.arrayFillNonAtomic(resultBuffer2, (short) 0, (short) resultBuffer2.length, (byte) 0);
+                xOffset = (short) (resultBuffer2.length - x.length());
+                Util.arrayCopyNonAtomic(x.value, (short) 0, resultBuffer2, xOffset, x.length());
+                rm.multCiph.doFinal(resultBuffer2, (byte) 0, (short) resultBuffer2.length, resultBuffer2, (short) 0);
             } else {
                 // x^2 is precomputed
-                if ((short) x_pow_2.length != (short) bnh.fnc_mult_resultArray2.length) {
-                    Util.arrayFillNonAtomic(bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length, (byte) 0);
-                    xOffset = (short) ((short) bnh.fnc_mult_resultArray2.length - (short) x_pow_2.length);
+                if ((short) x_pow_2.length != (short) resultBuffer2.length) {
+                    Util.arrayFillNonAtomic(resultBuffer2, (short) 0, (short) resultBuffer2.length, (byte) 0);
+                    xOffset = (short) ((short) resultBuffer2.length - (short) x_pow_2.length);
                 } else {
                     xOffset = 0;
                 }
-                Util.arrayCopyNonAtomic(x_pow_2, (short) 0, bnh.fnc_mult_resultArray2, xOffset, (short) x_pow_2.length);
+                Util.arrayCopyNonAtomic(x_pow_2, (short) 0, resultBuffer2, xOffset, (short) x_pow_2.length);
             }
             // ((x+y)^2) - x^2
-            subtract(bnh.fnc_mult_resultArray1, (short) 0, (short) bnh.fnc_mult_resultArray1.length, bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length);
+            subtract(resultBuffer1, (short) 0, (short) resultBuffer1.length, resultBuffer2, (short) 0, (short) resultBuffer2.length);
 
             // y^2
             if (y_pow_2 == null) {
                 // y^2 is not precomputed
-                Util.arrayFillNonAtomic(bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length, (byte) 0);
-                yOffset = (short) (bnh.fnc_mult_resultArray2.length - y.length());
-                Util.arrayCopyNonAtomic(y.value, (short) 0, bnh.fnc_mult_resultArray2, yOffset, y.length());
-                bnh.fnc_mult_cipher.doFinal(bnh.fnc_mult_resultArray2, (byte) 0, (short) bnh.fnc_mult_resultArray2.length, bnh.fnc_mult_resultArray2, (short) 0);
+                Util.arrayFillNonAtomic(resultBuffer2, (short) 0, (short) resultBuffer2.length, (byte) 0);
+                yOffset = (short) (resultBuffer2.length - y.length());
+                Util.arrayCopyNonAtomic(y.value, (short) 0, resultBuffer2, yOffset, y.length());
+                rm.multCiph.doFinal(resultBuffer2, (byte) 0, (short) resultBuffer2.length, resultBuffer2, (short) 0);
             } else {
                 // y^2 is precomputed
-                if ((short) y_pow_2.length != (short) bnh.fnc_mult_resultArray2.length) {
-                    Util.arrayFillNonAtomic(bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length, (byte) 0);
-                    yOffset = (short) ((short) bnh.fnc_mult_resultArray2.length - (short) y_pow_2.length);
+                if ((short) y_pow_2.length != (short) resultBuffer2.length) {
+                    Util.arrayFillNonAtomic(resultBuffer2, (short) 0, (short) resultBuffer2.length, (byte) 0);
+                    yOffset = (short) ((short) resultBuffer2.length - (short) y_pow_2.length);
                 } else {
                     yOffset = 0;
                 }
-                Util.arrayCopyNonAtomic(y_pow_2, (short) 0, bnh.fnc_mult_resultArray2, yOffset, (short) y_pow_2.length);
+                Util.arrayCopyNonAtomic(y_pow_2, (short) 0, resultBuffer2, yOffset, (short) y_pow_2.length);
             }
 
 
             // {(x+y)^2) - x^2} - y^2
-            subtract(bnh.fnc_mult_resultArray1, (short) 0, (short) bnh.fnc_mult_resultArray1.length, bnh.fnc_mult_resultArray2, (short) 0, (short) bnh.fnc_mult_resultArray2.length);
+            subtract(resultBuffer1, (short) 0, (short) resultBuffer1.length, resultBuffer2, (short) 0, (short) resultBuffer2.length);
 
             // we now have 2xy in mult_resultArray, divide it by 2 => shift by one bit and fill back into this
-            short multOffset = (short) ((short) bnh.fnc_mult_resultArray1.length - 1);
+            short multOffset = (short) ((short) resultBuffer1.length - 1);
             short res = 0;
             short res2 = 0;
             // this.length() must be different from multOffset, set proper ending condition
@@ -2991,62 +2223,80 @@ public class jcmathlib {
                 Util.arrayFillNonAtomic(this.value, (short) 0, stopOffset, (byte) 0);
             }
             for (short i = (short) (this.length() - 1); i >= stopOffset; i--) {
-                res = (short) (bnh.fnc_mult_resultArray1[multOffset] & 0xff);
+                res = (short) (resultBuffer1[multOffset] & 0xff);
                 res = (short) (res >> 1);
-                res2 = (short) (bnh.fnc_mult_resultArray1[(short) (multOffset - 1)] & 0xff);
+                res2 = (short) (resultBuffer1[(short) (multOffset - 1)] & 0xff);
                 res2 = (short) (res2 << 7);
                 this.value[i] = (byte) (short) (res | res2);
                 multOffset--;
             }
-            bnh.unlock(bnh.fnc_mult_resultArray1);
-            bnh.unlock(bnh.fnc_mult_resultArray2);
+        }
+
+
+        /**
+         * Performs multiplication of two BigNat x and y and stores result into this.
+         * RSA engine is used to speedup operation for large values.
+         *
+         * @param x       first value to multiply
+         * @param y       second value to multiply
+         * @param mod     modulus
+         */
+        public void mod_mult_rsa_trick(BigNat x, BigNat y, BigNat mod) {
+            this.clone(x);
+            this.mod_add(y, mod);
+            this.mod_exp2(mod);
+
+            BigNat tmp = rm.BN_D;
+            tmp.clone(x);
+            tmp.mod_exp2(mod);
+            this.mod_sub(tmp, mod);
+
+            tmp.clone(y);
+            tmp.mod_exp2(mod);
+            this.mod_sub(tmp, mod);
+
+            boolean carry = false;
+            if(this.is_odd()) {
+                carry = this.add_carry(mod);
+            }
+
+            this.divide_by_2(carry ? (short) (1 << 7) : (short) 0);
         }
 
         /**
          * Multiplication of bignats x and y computed by modulo {@code modulo}.
          * The result is stored to this.
-         * @param x first value to multiply
-         * @param y second value to multiply
+         *
+         * @param x      first value to multiply
+         * @param y      second value to multiply
          * @param modulo value of modulo
          */
-        public void mod_mult(Bignat x, Bignat y, Bignat modulo) {
-            bnh.fnc_mod_mult_tmpThis.lock();
-            bnh.fnc_mod_mult_tmpThis.resize_to_max(false);
-            // Perform fast multiplication using RSA trick
-            bnh.fnc_mod_mult_tmpThis.mult(x, y);
-            // Compute modulo
-            bnh.fnc_mod_mult_tmpThis.mod(modulo);
-            bnh.fnc_mod_mult_tmpThis.shrink();
-            this.clone(bnh.fnc_mod_mult_tmpThis);
-            bnh.fnc_mod_mult_tmpThis.unlock();
-        }
-        // Potential speedup for  modular multiplication
-        // Binomial theorem: (op1 + op2)^2 - (op1 - op2)^2 = 4 * op1 * op2 mod (mod)
+        public void mod_mult(BigNat x, BigNat y, BigNat modulo) {
+            BigNat tmp = rm.BN_E; // mod_mult is called from sqrt_FP => requires BN_E not being locked when mod_mult is called
 
-
-
-        /**
-         * One digit left shift.
-         * <P>
-         * Asserts that the first digit is zero.
-         */
-        public void shift_left() {
-            // NOTE: assumes that overlapping src and dest arrays are properly handled by Util.arrayCopyNonAtomic
-            Util.arrayCopyNonAtomic(this.value, (short) 1, this.value, (short) 0, (short) (size - 1));
-            value[(short) (size - 1)] = 0;
+            if(OperationSupport.getInstance().RSA_MOD_MULT_TRICK) {
+                tmp.mod_mult_rsa_trick(x, y, modulo);
+            } else {
+                tmp.resize_to_max(false);
+                tmp.mult(x, y);
+                tmp.mod(modulo);
+                tmp.shrink();
+            }
+            this.clone(tmp);
         }
 
         /**
-         * Optimized division by value two
+         * Optimized division by value two with carry
+         *
+         * @param carry XORed into the highest byte
          */
-        private void divide_by_2() {
+        private void divide_by_2(short carry) {
             short tmp = 0;
             short tmp2 = 0;
-            short carry = 0;
             for (short i = 0; i < this.size; i++) {
                 tmp = (short) (this.value[i] & 0xff);
                 tmp2 = tmp;
-                tmp >>=1; // shift by 1 => divide by 2
+                tmp >>= 1; // shift by 1 => divide by 2
                 this.value[i] = (byte) (tmp | carry);
                 carry = (short) (tmp2 & 0x01); // save lowest bit
                 carry <<= 7; // shifted to highest position
@@ -3054,384 +2304,198 @@ public class jcmathlib {
         }
 
         /**
-         * Inefficient modular multiplication.
-         *
-         * This bignat is assigned to {@code x * y} modulo {@code mod}. Inefficient,
-         * because it computes the modules with {@link #remainder_divide
-         * remainder_divide} in each multiplication round. To avoid overflow the
-         * first two digits of {@code x} and {@code mod} must be zero (which plays
-         * nicely with the requirements for montgomery multiplication, see
-         * {@link #montgomery_mult montgomery_mult}).
-         * <P>
-         * Asserts that {@code x} and {@code mod} have the same size. Argument
-         * {@code y} can be arbitrary in size.
-         * <P>
-         * Included here to make it possible to compute the squared <a
-         * href="package-summary.html#montgomery_factor">montgomery factor</a>,
-         * which is needed to montgomerize numbers before montgomery multiplication.
-         * Until now this has never been used, because the montgomery factors are
-         * computed on the host and then installed on the card. Or numbers are
-         * montgomerized on the host already.
-         *
-         * @param x first factor, first two digits must be zero
-         * @param y second factor
-         * @param mod modulus, first two digits must be zero
+         * Optimized division by value two
          */
-        public void mod_mult_inefficient(Bignat x, Bignat y, Bignat mod) {
-            short len = 0;
-            if (x.length() >= mod.length()) {
-                len = x.length();
-            } else {
-                len = mod.length();
-            }
-
-            short magicAdd = 2;
-            bnh.fnc_mult_mod_tmp_x.lock();
-            bnh.fnc_mult_mod_tmp_x.set_size((short) (len + magicAdd));
-            bnh.fnc_mult_mod_tmp_x.copy(x);
-
-            bnh.fnc_mult_mod_tmp_mod.lock();
-            bnh.fnc_mult_mod_tmp_mod.set_size((short) (len + magicAdd));
-            bnh.fnc_mult_mod_tmp_mod.copy(mod);
-
-            bnh.fnc_mult_mod_tmpThis.lock();
-            bnh.fnc_mult_mod_tmpThis.set_size((short) (this.length() + magicAdd));
-            bnh.fnc_mult_mod_tmpThis.zero();
-            for (short i = 0; i < y.size; i++) {
-                bnh.fnc_mult_mod_tmpThis.shift_left();
-                bnh.fnc_mult_mod_tmpThis.times_add(bnh.fnc_mult_mod_tmp_x, (short) (y.value[i] & digit_mask));
-                bnh.fnc_mult_mod_tmpThis.remainder_divide(bnh.fnc_mult_mod_tmp_mod, null);
-            }
-            bnh.fnc_mult_mod_tmp_x.unlock();
-            bnh.fnc_mult_mod_tmp_mod.unlock();
-
-            bnh.fnc_mult_mod_tmpThis.shrink();
-            this.clone(bnh.fnc_mult_mod_tmpThis);
-            bnh.fnc_mult_mod_tmpThis.unlock();
-        }
-
-
-        /**
-         * Computes square root of this modulo provided prime
-         * @param p prime
-         */
-        public void sqrt_FP(Bignat p) {
-            if(p.value[(short) (p.length() - 1)] % 4 == 3) {
-                fastSqrtFP(p);
-            } else {
-                slowSqrtFP(p);
-            }
+        private void divide_by_2() {
+            divide_by_2((short) 0);
         }
 
         /**
-         * Computes square root of this modulo provided prime which MUST be prime using Tonelli
+         * Computes square root of provided bignat which MUST be prime using Tonelli
          * Shanks Algorithm. The result (one of the two roots) is stored to this.
+         *
          * @param p value to compute square root from
          */
-        private void slowSqrtFP(Bignat p) {
-            // 1. Find Q and S such that p - 1 = Q * 2^S and Q is odd
-            bnh.fnc_sqrt_p_1.lock();
-            bnh.fnc_sqrt_p_1.clone(p);
-            bnh.fnc_sqrt_p_1.decrement_one();
+        public void sqrt_FP(BigNat p) {
+            BigNat s = rm.BN_A;
+            BigNat exp = rm.BN_A;
+            BigNat p1 = rm.BN_B;
+            BigNat q = rm.BN_C;
+            BigNat tmp = rm.BN_D;
+            BigNat z = rm.BN_E;
 
-            bnh.fnc_sqrt_S.lock();
-            bnh.fnc_sqrt_S.set_size(p.length());
-            bnh.fnc_sqrt_S.zero();
-            bnh.fnc_sqrt_Q.lock();
-            bnh.fnc_sqrt_Q.clone(bnh.fnc_sqrt_p_1);
+            // 1. By factoring out powers of 2, find Q and S such that p-1=Q2^S p-1=Q*2^S and Q is odd
+            p1.clone(p);
+            p1.decrement_one();
 
-            while (!bnh.fnc_sqrt_Q.is_odd()) {
-                bnh.fnc_sqrt_S.increment_one();
-                bnh.fnc_sqrt_Q.divide_by_2();
+            // Compute Q
+            q.clone(p1);
+            q.divide_by_2(); // Q /= 2
+
+            //Compute S
+            s.set_size(p.length());
+            s.zero();
+            tmp.set_size(p.length());
+            tmp.zero();
+
+            while (!tmp.same_value(q)) {
+                s.increment_one();
+                // TODO investigate why just mod_mult(s, q, p) does not work (apart from locks)
+                tmp.resize_to_max(false);
+                tmp.mult(s, q);
+                tmp.mod(p);
+                tmp.shrink();
             }
 
             // 2. Find the first quadratic non-residue z by brute-force search
-            bnh.fnc_sqrt_exp.lock();
-            bnh.fnc_sqrt_exp.clone(bnh.fnc_sqrt_p_1);
-            bnh.fnc_sqrt_exp.divide_by_2();
+            exp.clone(p1);
+            exp.divide_by_2();
 
-            bnh.fnc_sqrt_z.lock();
-            bnh.fnc_sqrt_z.set_size(p.length());
-            bnh.fnc_sqrt_z.one();
-            bnh.fnc_sqrt_tmp.lock();
-            bnh.fnc_sqrt_tmp.set_size(p.length());
-            bnh.fnc_sqrt_tmp.zero();
-            bnh.fnc_sqrt_tmp.copy(Bignat_Helper.ONE);
 
-            while (!bnh.fnc_sqrt_tmp.same_value(bnh.fnc_sqrt_p_1)) {
-                bnh.fnc_sqrt_z.increment_one();
-                bnh.fnc_sqrt_tmp.copy(bnh.fnc_sqrt_z);
-                bnh.fnc_sqrt_tmp.mod_exp(bnh.fnc_sqrt_exp, p); // Euler's criterion
+            z.set_size(p.length());
+            z.one();
+            tmp.zero();
+            tmp.copy(ResourceManager.ONE);
+
+            while (!tmp.same_value(p1)) {
+                z.increment_one();
+                tmp.copy(z);
+                tmp.mod_exp(exp, p);
             }
-            bnh.fnc_sqrt_p_1.unlock();
-            bnh.fnc_sqrt_tmp.unlock();
-
-            // 3. Compute first candidate
-            bnh.fnc_sqrt_exp.copy(bnh.fnc_sqrt_Q);
-            bnh.fnc_sqrt_exp.increment_one();
-            bnh.fnc_sqrt_exp.divide_by_2();
-
-            bnh.fnc_sqrt_t.lock();
-            bnh.fnc_sqrt_t.copy(this);
-            bnh.fnc_sqrt_t.mod_exp(bnh.fnc_sqrt_Q, p);
-
-            if (bnh.fnc_sqrt_t.is_zero()) {
-                bnh.fnc_sqrt_z.unlock();
-                bnh.fnc_sqrt_S.unlock();
-                bnh.fnc_sqrt_t.unlock();
-                bnh.fnc_sqrt_exp.unlock();
-                bnh.fnc_sqrt_Q.unlock();
-                this.zero();
-                return;
-            }
+            exp.copy(q);
+            exp.increment_one();
+            exp.divide_by_2();
 
             this.mod(p);
-            this.mod_exp(bnh.fnc_sqrt_exp, p);
-            bnh.fnc_sqrt_exp.unlock();
-
-            if (bnh.fnc_sqrt_t.same_value(Bignat_Helper.ONE)) {
-                bnh.fnc_sqrt_z.unlock();
-                bnh.fnc_sqrt_S.unlock();
-                bnh.fnc_sqrt_t.unlock();
-                bnh.fnc_sqrt_Q.unlock();
-                return;
-            }
-
-            // 4. Search for further candidates
-            bnh.fnc_sqrt_z.mod_exp(bnh.fnc_sqrt_Q, p);
-            bnh.fnc_sqrt_Q.unlock();
-
-            while(true) {
-                bnh.fnc_sqrt_tmp.lock();
-                bnh.fnc_sqrt_tmp.copy(bnh.fnc_sqrt_t);
-                bnh.fnc_sqrt_i.lock();
-                bnh.fnc_sqrt_i.set_size(p.length());
-                bnh.fnc_sqrt_i.zero();
-
-                do {
-                    bnh.fnc_sqrt_tmp.mod_exp2(p);
-                    bnh.fnc_sqrt_i.increment_one();
-                } while (!bnh.fnc_sqrt_tmp.same_value(Bignat_Helper.ONE));
-
-                bnh.fnc_sqrt_tmp.unlock();
-
-                bnh.fnc_sqrt_b.lock();
-                bnh.fnc_sqrt_b.copy(bnh.fnc_sqrt_z);
-                bnh.fnc_sqrt_S.subtract(bnh.fnc_sqrt_i);
-                bnh.fnc_sqrt_S.decrement_one();
-
-                bnh.fnc_sqrt_tmp.lock();
-                bnh.fnc_sqrt_tmp.one();
-                while(!bnh.fnc_sqrt_S.is_zero()) {
-                    bnh.fnc_sqrt_tmp.shift_left();
-                    bnh.fnc_sqrt_S.decrement_one();
-                }
-                bnh.fnc_sqrt_b.mod_exp(bnh.fnc_sqrt_tmp, p);
-                bnh.fnc_sqrt_tmp.unlock();
-                bnh.fnc_sqrt_S.copy(bnh.fnc_sqrt_i);
-                bnh.fnc_sqrt_i.unlock();
-                bnh.fnc_sqrt_z.copy(bnh.fnc_sqrt_b);
-                bnh.fnc_sqrt_z.mod_exp2(p);
-                bnh.fnc_sqrt_t.mod_mult(bnh.fnc_sqrt_t, bnh.fnc_sqrt_z, p);
-                this.mod_mult(this, bnh.fnc_sqrt_b, p);
-                bnh.fnc_sqrt_b.unlock();
-
-                if (bnh.fnc_sqrt_t.is_zero()) {
-                    this.zero();
-                    break;
-                }
-                if (bnh.fnc_sqrt_t.same_value(Bignat_Helper.ONE)) {
-                    break;
-                }
-            }
-            bnh.fnc_sqrt_z.unlock();
-            bnh.fnc_sqrt_S.unlock();
-            bnh.fnc_sqrt_t.unlock();
-        }
-
-        /**
-         * Computes $a^{(p + 1)/4} (mod p)$ which is a modular square root when p % 4 == 3.
-         * @param p prime assumed to be congruent to 3 (mod 4)
-         */
-        private void fastSqrtFP(Bignat p) {
-            Bignat exp = bnh.rm.helper_BN_D;
-            exp.lock();
-            exp.clone(p);
-            exp.increment_one();
-
-            exp.divide_by_2();
-            exp.divide_by_2();
             this.mod_exp(exp, p);
-            exp.unlock();
         }
 
 
         /**
          * Computes and stores modulo of this bignat.
+         *
          * @param modulo value of modulo
          */
-        public void mod(Bignat modulo) {
+        public void mod(BigNat modulo) {
             this.remainder_divide(modulo, null);
             // NOTE: attempt made to utilize crypto co-processor in pow2Mod_RSATrick_worksOnlyAbout30pp, but doesn't work for all inputs
         }
 
 
-
         /**
          * Computes inversion of this bignat taken modulo {@code modulo}.
          * The result is stored into this.
+         *
          * @param modulo value of modulo
          */
-        public void mod_inv(Bignat modulo) {
-            bnh.fnc_mod_minus_2.lock();
-            bnh.fnc_mod_minus_2.clone(modulo);
-            bnh.fnc_mod_minus_2.decrement_one();
-            bnh.fnc_mod_minus_2.decrement_one();
+        public void mod_inv(BigNat modulo) {
+            BigNat tmp = rm.BN_B;
+            tmp.clone(modulo);
+            tmp.decrement_one();
+            tmp.decrement_one();
 
-            mod_exp(bnh.fnc_mod_minus_2, modulo);
-            bnh.fnc_mod_minus_2.unlock();
-        }
-
-        /**
-         * Computes right bit shift.
-         * The result is stored into this.
-         * @return carry bit
-         */
-        public boolean shift_bits_right() {
-            byte carry = (byte) 0x00;
-            byte previous;
-            for(short i = 0; i < this.size; ++i) {
-                previous = carry;
-                carry = (byte) (this.value[i] & (byte) 0x01);
-                this.value[i] = (byte) (this.value[i] >> (short) 1);
-                if (previous == (byte) 0x01) {
-                    this.value[i] |= (byte) (0x80);
-                } else {
-                    this.value[i] &= (byte) (0x7f);
-                }
-            }
-            return carry == (byte) 0x01;
+            mod_exp(tmp, modulo);
         }
 
         /**
          * Computes {@code res := this ** exponent mod modulo} and store results into this.
          * Uses RSA engine to quickly compute this^exponent % modulo
+         *
          * @param exponent value of exponent
-         * @param modulo value of modulo
+         * @param modulo   value of modulo
          */
-        public void mod_exp(Bignat exponent, Bignat modulo) {
+        public void mod_exp(BigNat exponent, BigNat modulo) {
             if (!OperationSupport.getInstance().RSA_MOD_EXP)
                 ISOException.throwIt(ReturnCodes.SW_OPERATION_NOT_SUPPORTED);
 
-            short tmp_size = (short)(bnh.MODULO_RSA_ENGINE_MAX_LENGTH_BITS / 8);
-            bnh.fnc_mod_exp_modBN.lock();
-            bnh.fnc_mod_exp_modBN.set_size(tmp_size);
+            BigNat tmpMod = rm.BN_F;  // mod_exp is called from sqrt_FP => requires BN_F not being locked when mod_exp is called
+            byte[] tmpBuffer = rm.ARRAY_A;
+            short tmpSize = (short) (rm.MODULO_RSA_ENGINE_MAX_LENGTH_BITS / 8);
+            short modLength;
 
-            short len = n_mod_exp(tmp_size, this, exponent.as_byte_array(), exponent.length(), modulo, bnh.fnc_mod_exp_modBN.value, (short) 0);
+            tmpMod.set_size(tmpSize);
+
+            if(OperationSupport.getInstance().RSA_MOD_EXP_PUB) {
+                // Verify if pre-allocated engine match the required values
+                if (rm.expPub.getSize() < (short) (modulo.length() * 8) || rm.expPub.getSize() < (short) (this.length() * 8)) {
+                    ISOException.throwIt(ReturnCodes.SW_BIGNAT_MODULOTOOLARGE);
+                }
+                if (OperationSupport.getInstance().RSA_KEY_REFRESH) {
+                    // Simulator fails when reusing the original object
+                    rm.expPub = (RSAPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PUBLIC, rm.MODULO_RSA_ENGINE_MAX_LENGTH_BITS, false);
+                }
+                rm.expPub.setExponent(exponent.as_byte_array(), (short) 0, exponent.length());
+                if (OperationSupport.getInstance().RSA_RESIZE_MODULUS) {
+                    if (OperationSupport.getInstance().RSA_RESIZE_MODULUS_APPEND) {
+                        modulo.append_zeros(tmpSize, tmpBuffer, (short) 0);
+                    } else {
+                        modulo.prepend_zeros(tmpSize, tmpBuffer, (short) 0);
+
+                    }
+                    rm.expPub.setModulus(tmpBuffer, (short) 0, tmpSize);
+                    modLength = tmpSize;
+                } else {
+                    rm.expPub.setModulus(modulo.as_byte_array(), (short) 0, modulo.length());
+                    modLength = modulo.length();
+                }
+                rm.expCiph.init(rm.expPub, Cipher.MODE_DECRYPT);
+            } else {
+                // Verify if pre-allocated engine match the required values
+                if (rm.expPriv.getSize() < (short) (modulo.length() * 8) || rm.expPriv.getSize() < (short) (this.length() * 8)) {
+                    ISOException.throwIt(ReturnCodes.SW_BIGNAT_MODULOTOOLARGE);
+                }
+                if (OperationSupport.getInstance().RSA_KEY_REFRESH) {
+                    // Simulator fails when reusing the original object
+                    rm.expPriv = (RSAPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PRIVATE, rm.MODULO_RSA_ENGINE_MAX_LENGTH_BITS, false);
+                }
+                rm.expPriv.setExponent(exponent.as_byte_array(), (short) 0, exponent.length());
+                if (OperationSupport.getInstance().RSA_RESIZE_MODULUS) {
+                    if (OperationSupport.getInstance().RSA_RESIZE_MODULUS_APPEND) {
+                        modulo.append_zeros(tmpSize, tmpBuffer, (short) 0);
+                    } else {
+                        modulo.prepend_zeros(tmpSize, tmpBuffer, (short) 0);
+
+                    }
+                    rm.expPriv.setModulus(tmpBuffer, (short) 0, tmpSize);
+                    modLength = tmpSize;
+                } else {
+                    rm.expPriv.setModulus(modulo.as_byte_array(), (short) 0, modulo.length());
+                    modLength = modulo.length();
+                }
+                rm.expCiph.init(rm.expPriv, Cipher.MODE_DECRYPT);
+            }
+            short len;
+            if (OperationSupport.getInstance().RSA_RESIZE_BASE) {
+                this.prepend_zeros(modLength, tmpBuffer, (short) 0);
+                len = rm.expCiph.doFinal(tmpBuffer, (short) 0, modLength, tmpMod.value, (short) 0);
+            } else {
+                len = rm.expCiph.doFinal(this.as_byte_array(), (short) 0, this.length(), tmpMod.value, (short) 0);
+            }
+
             if (OperationSupport.getInstance().RSA_PREPEND_ZEROS) {
                 // Decrypted length can be either tmp_size or less because of leading zeroes consumed by simulator engine implementation
                 // Move obtained value into proper position with zeroes prepended
-                if (len != tmp_size) {
-                    bnh.lock(bnh.fnc_deep_resize_tmp);
-                    Util.arrayFillNonAtomic(bnh.fnc_deep_resize_tmp, (short) 0, (short) bnh.fnc_deep_resize_tmp.length, (byte) 0);
-                    Util.arrayCopyNonAtomic(bnh.fnc_mod_exp_modBN.value, (short) 0, bnh.fnc_deep_resize_tmp, (short) (tmp_size - len), len);
-                    Util.arrayCopyNonAtomic(bnh.fnc_deep_resize_tmp, (short) 0, bnh.fnc_mod_exp_modBN.value, (short) 0, tmp_size);
-                    bnh.unlock(bnh.fnc_deep_resize_tmp);
+                if (len != tmpSize) {
+                    Util.arrayFillNonAtomic(tmpBuffer, (short) 0, (short) tmpBuffer.length, (byte) 0);
+                    Util.arrayCopyNonAtomic(tmpMod.value, (short) 0, tmpBuffer, (short) (tmpSize - len), len);
+                    Util.arrayCopyNonAtomic(tmpBuffer, (short) 0, tmpMod.value, (short) 0, tmpSize);
                 }
-            }
-            else {
+            } else {
                 // real cards should keep whole length of block, just check
-                if (len != tmp_size) {
+                if (len != tmpSize) {
                     ISOException.throwIt(ReturnCodes.SW_ECPOINT_UNEXPECTED_KA_LEN);
                 }
             }
-            bnh.fnc_mod_exp_modBN.mod(modulo);
-            bnh.fnc_mod_exp_modBN.shrink();
-            this.clone(bnh.fnc_mod_exp_modBN);
-            bnh.fnc_mod_exp_modBN.unlock();
+            if (OperationSupport.getInstance().RSA_MOD_EXP_EXTRA_MOD) {
+                tmpMod.mod(modulo);
+            }
+            tmpMod.shrink();
+            this.clone(tmpMod);
         }
 
 
-        public void mod_exp2(Bignat modulo) {
-            mod_exp(Bignat_Helper.TWO, modulo);
-            //this.pow2Mod_RSATrick(modulo);
-    /*
-            short tmp_size = (short) (occ.bnHelper.MOD_RSA_LENGTH / 8);
-
-            // Idea: a = this with prepended zeroes, b = this with appended zeroes, modulo with appended zeroes
-            // Compute mult_RSATrick
-            this.prependzeros(tmp_size, occ.bnHelper.helper_BN_A.as_byte_array(), (short) 0);
-            occ.bnHelper.helper_BN_A.setSize(tmp_size);
-            this.appendzeros(tmp_size, occ.bnHelper.helper_BN_B.as_byte_array(), (short) 0);
-            occ.bnHelper.helper_BN_B.setSize(tmp_size);
-
-            mult_RSATrick(occ.bnHelper.helper_BN_A, occ.bnHelper.helper_BN_B);
-
-            // We will use prepared engine with exponent=2 and very large modulus (instead of provided modulus)
-            // The reason is to avoid need for setting custom modulus and re-init RSA engine
-            // Mod operation is computed later
-            occ.bnHelper.modPublicKey.setExponent(occ.bnHelper.CONST_TWO, (short) 0, (short) 1);
-            occ.locker.lock(occ.bnHelper.fastResizeArray);
-            modulo.appendzeros(tmp_size, occ.bnHelper.fastResizeArray, (short) 0);
-            // NOTE: ideally, we would just set RSA engine modulus to our modulo. But smallest RSA key is 512 bit while
-            // our values are commonly smaller (e.g., 32B for 256b ECC). Prepending leading zeroes will cause 0xf105 (CryptoException.InvalidUse)
-            //modulo.prependzeros(tmp_size, occ.bnHelper.fastResizeArray, (short) 0);
-            occ.bnHelper.modPublicKey.setModulus(occ.bnHelper.fastResizeArray, (short) 0, tmp_size);
-            occ.bnHelper.modCipher.init(occ.bnHelper.modPublicKey, Cipher.MODE_DECRYPT);
-            this.prependzeros(tmp_size, occ.bnHelper.fastResizeArray, (short) 0);
-            occ.bnHelper.modCipher.doFinal(occ.bnHelper.fastResizeArray, (byte) 0, tmp_size, occ.bnHelper.fastResizeArray, (short) 0);
-            occ.locker.unlock(occ.bnHelper.fastResizeArray);
-
-            // We used RSA engine with large modulo => some leading values will be zero (|this^2| <= 2*|this|)
-            short startOffset = 0; // Find first nonzero value in resulting buffer
-            while (occ.bnHelper.fastResizeArray[startOffset] == 0) {
-                startOffset++;
-            }
-            short len = (short) (tmp_size - startOffset);
-            this.setSize(len);
-            this.from_byte_array(len, (short) 0, occ.bnHelper.fastResizeArray, startOffset);
-            occ.locker.unlock(occ.bnHelper.fastResizeArray);
-    */
-        }
-        /**
-         * Calculates {@code res := base ** exp mod mod} using RSA engine.
-         * Requirements:
-         * 1. Modulo must be either 521, 1024, 2048 or other lengths supported by RSA (see appendzeros() and mod() method)
-         * 2. Base must have the same size as modulo (see prependzeros())
-         * @param baseLen   length of base rounded to size of RSA engine
-         * @param base      value of base (if size is not equal to baseLen then zeroes are appended)
-         * @param exponent  array with exponent
-         * @param exponentLen length of exponent
-         * @param modulo    value of modulo
-         * @param resultArray array for the computed result
-         * @param resultOffset start offset of resultArray
-         */
-        private short n_mod_exp(short baseLen, Bignat base, byte[] exponent, short exponentLen, Bignat modulo, byte[] resultArray, short resultOffset) {
-            // Verify if pre-allocated engine match the required values
-            if (bnh.fnc_NmodE_pubKey.getSize() < (short) (modulo.length() * 8)) {
-                // attempt to perform modulu with higher or smaller than supported length - try change constant MODULO_ENGINE_MAX_LENGTH
-                ISOException.throwIt(ReturnCodes.SW_BIGNAT_MODULOTOOLARGE);
-            }
-            if (bnh.fnc_NmodE_pubKey.getSize() < (short) (base.length() * 8)) {
-                ISOException.throwIt(ReturnCodes.SW_BIGNAT_MODULOTOOLARGE);
-            }
-
-            // Potential problem: we are changing key value for publicKey already used before with occ.bnHelper.modCipher.
-            // Simulator and potentially some cards fail to initialize this new value properly (probably assuming that same key object will always have same value)
-            // Fix (if problem occure): generate new key object: RSAPublicKey publicKey = (RSAPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PUBLIC, (short) (baseLen * 8), false);
-            if(OperationSupport.getInstance().RSA_KEY_REFRESH) {
-                bnh.fnc_NmodE_pubKey = (RSAPublicKey) KeyBuilder.buildKey(javacard.security.KeyBuilder.TYPE_RSA_PUBLIC, (short) (baseLen * 8), false);
-            }
-            bnh.fnc_NmodE_pubKey.setExponent(exponent, (short) 0, exponentLen);
-            bnh.lock(bnh.fnc_deep_resize_tmp);
-            modulo.append_zeros(baseLen, bnh.fnc_deep_resize_tmp, (short) 0);
-            bnh.fnc_NmodE_pubKey.setModulus(bnh.fnc_deep_resize_tmp, (short) 0, baseLen);
-            bnh.fnc_NmodE_cipher.init(bnh.fnc_NmodE_pubKey, Cipher.MODE_DECRYPT);
-            base.prepend_zeros(baseLen, bnh.fnc_deep_resize_tmp, (short) 0);
-            // BUGBUG: Check if input is not all zeroes (causes out-of-bound exception on some cards)
-            short len = bnh.fnc_NmodE_cipher.doFinal(bnh.fnc_deep_resize_tmp, (short) 0, baseLen, resultArray, resultOffset);
-            bnh.unlock(bnh.fnc_deep_resize_tmp);
-            return len;
+        public void mod_exp2(BigNat modulo) {
+            mod_exp(ResourceManager.TWO, modulo);
         }
 
         /**
@@ -3439,33 +2503,31 @@ public class jcmathlib {
          *
          * @param mod value of modulus
          */
-        public void mod_negate(Bignat mod) {
-            bnh.fnc_negate_tmp.lock();
-            bnh.fnc_negate_tmp.set_size(mod.length());
-            bnh.fnc_negate_tmp.copy(mod); //-y=mod-y
+        public void mod_negate(BigNat mod) {
+            BigNat tmp = rm.BN_B;
 
-            if (this.lesser(mod)) { // y<mod
-                bnh.fnc_negate_tmp.subtract(this);//-y=mod-y
-                this.copy(bnh.fnc_negate_tmp);
-            } else {// y>=mod
+            tmp.set_size(mod.length());
+            tmp.copy(mod); //-y=mod-y
+
+            if (!this.lesser(mod)) { // y<mod
                 this.mod(mod);//-y=y-mod
-                bnh.fnc_negate_tmp.subtract(this);
-                this.copy(bnh.fnc_negate_tmp);
             }
-            bnh.fnc_negate_tmp.unlock();
+            tmp.subtract(this);
+            this.copy(tmp);
         }
 
         /**
          * Shifts stored value to right by specified number of bytes. This operation equals to multiplication by value numBytes * 256.
+         *
          * @param numBytes number of bytes to shift
          */
         public void shift_bytes_right(short numBytes) {
+            byte[] tmp = rm.ARRAY_A;
+
             // Move whole content by numBytes offset
-            bnh.lock(bnh.fnc_shift_bytes_right_tmp);
-            Util.arrayCopyNonAtomic(this.value, (short) 0, bnh.fnc_shift_bytes_right_tmp, (short) 0, (short) (this.value.length));
-            Util.arrayCopyNonAtomic(bnh.fnc_shift_bytes_right_tmp, (short) 0, this.value, numBytes, (short) ((short) (this.value.length) - numBytes));
+            Util.arrayCopyNonAtomic(this.value, (short) 0, tmp, (short) 0, (short) (this.value.length));
+            Util.arrayCopyNonAtomic(tmp, (short) 0, this.value, numBytes, (short) ((short) (this.value.length) - numBytes));
             Util.arrayFillNonAtomic(this.value, (short) 0, numBytes, (byte) 0);
-            bnh.unlock(bnh.fnc_shift_bytes_right_tmp);
         }
 
         /**
@@ -3473,25 +2535,25 @@ public class jcmathlib {
          * allocator type (RAM or EEROM). Maximum size can be increased only by
          * future reallocation if allowed by ALLOW_RUNTIME_REALLOCATION flag
          *
-         * @param maxSize maximum size of this Bignat
+         * @param maxSize       maximum size of this Bignat
          * @param allocatorType memory allocator type. If
-         * JCSystem.MEMORY_TYPE_PERSISTENT then memory is allocated in EEPROM. Use
-         * JCSystem.CLEAR_ON_RESET or JCSystem.CLEAR_ON_DESELECT for allocation in
-         * RAM with corresponding clearing behaviour.
+         *                      JCSystem.MEMORY_TYPE_PERSISTENT then memory is allocated in EEPROM. Use
+         *                      JCSystem.CLEAR_ON_RESET or JCSystem.CLEAR_ON_DESELECT for allocation in
+         *                      RAM with corresponding clearing behaviour.
          */
         private void allocate_storage_array(short maxSize, byte allocatorType) {
             this.size = maxSize;
             this.max_size = maxSize;
             this.allocatorType = allocatorType;
-            this.value = bnh.allocateByteArray(this.max_size, allocatorType);
+            this.value = rm.memAlloc.allocateByteArray(this.max_size, allocatorType);
         }
 
         /**
          * Set content of Bignat internal array
          *
          * @param from_array_length available data in {@code from_array}
-         * @param this_offset offset where data should be stored
-         * @param from_array data array to deserialize from
+         * @param this_offset       offset where data should be stored
+         * @param from_array        data array to deserialize from
          * @param from_array_offset offset in {@code from_array}
          * @return the number of shorts actually read, except for the case where
          * deserialization finished by reading precisely {@code len} shorts, in this
@@ -3510,22 +2572,7 @@ public class jcmathlib {
         }
 
         /**
-         * Set content of Bignat internal array
-         *
-         * @param this_offset offset where data should be stored
-         * @param from_array data array to deserialize from
-         * @param from_array_length available data in {@code from_array}
-         * @param from_array_offset offset in {@code from_array}
-         * @return the number of shorts actually read, except for the case where
-         * deserialization finished by reading precisely {@code len} shorts, in this
-         * case {@code len + 1} is returned.
-         */
-        public short set_from_byte_array(short this_offset, byte[] from_array, short from_array_offset, short from_array_length) {
-            return from_byte_array(from_array_length, this_offset, from_array, from_array_offset);
-        }
-
-        /**
-         * Set content of Bignat internal array
+         * Set content of BigNat internal array
          *
          * @param from_array data array to deserialize from
          * @return the number of shorts actually read
@@ -3535,546 +2582,174 @@ public class jcmathlib {
         }
     }
 
-    /**
-     *
-     * @author Petr Svenda
-     */
-    static class Base_Helper {
-        final ResourceManager rm;
 
-        public Base_Helper(ResourceManager resman) {
-            rm = resman;
-        }
+    public static class ResourceManager {
+        public ObjectAllocator memAlloc;
 
-        /**
-         * Lock/reserve provided object for subsequent use. Used to protect
-         * corruption of pre-allocated shared objects in different, potentially
-         * nested, operations. Must be unlocked later on.
-         *
-         * @param objToLock array to be locked
-         * @throws SW_ALREADYLOCKED if already locked (is already in use by other
-         * operation)
-         */
-    /*
-        public void lock(Object objToLock) {
-            rm.locker.lock(objToLock);
-        }
-    */
-        public void lock(byte[] objToLock) {
-            rm.locker.lock(objToLock);
-        }
-
-        /**
-         * Unlock/release object from use. Used to protect corruption of
-         * pre-allocated objects used in different nested operations. Must be locked
-         * before.
-         *
-         * @param objToUnlock object to unlock
-         * @throws SW_NOTLOCKED_BIGNAT if was not locked before (inconsistence in
-         * lock/unlock sequence)
-         */
-    /*
-        public void unlock(Object objToUnlock) {
-            rm.locker.unlock(objToUnlock);
-        }
-    */
-        public void unlock(byte[] objToUnlock) {
-            rm.locker.unlock(objToUnlock);
-        }
-
-        /**
-         * Unlocks all locked objects
-         */
-        public void unlockAll() {
-            rm.locker.unlockAll();
-        }
-
-        /**
-         * Check if provided object is logically locked
-         *
-         * @param objToUnlock object to be checked
-         * @return true of array is logically locked, false otherwise
-         */
-    /*
-        public boolean isLocked(Object objToUnlock) {
-            return rm.locker.isLocked(objToUnlock);
-        }
-    */
-        /**
-         * Allocates new byte[] array with provided length either in RAM or EEPROM
-         * based on an allocator type. Method updates internal counters of bytes
-         * allocated with specific allocator. Use {@code getAllocatedInRAM()} or
-         * {@code getAllocatedInEEPROM} for counters readout.
-         *
-         * @param length length of array
-         * @param allocatorType type of allocator
-         * @return allocated array
-         */
-        public byte[] allocateByteArray(short length, byte allocatorType) {
-            return rm.memAlloc.allocateByteArray(length, allocatorType);
-        }
-    }
-
-    /**
-     *
-     * @author Petr Svenda
-     */
-    static class Bignat_Helper extends Base_Helper {
-        /**
-         * The size of speedup engine used for fast modulo exponent computation
-         * (must be larger than biggest Bignat used)
-         */
-        public short MODULO_RSA_ENGINE_MAX_LENGTH_BITS = (short) 512;
-        /**
-         * The size of speedup engine used for fast multiplication of large numbers
-         * Must be larger than 2x biggest Bignat used
-         */
-        public short MULT_RSA_ENGINE_MAX_LENGTH_BITS = (short) 768;
-
-        /**
-         * If true, fast multiplication of large numbers via RSA engine can be used.
-         * Is set automatically after successful allocation of required engines
-         */
-        public boolean FLAG_FAST_MULT_VIA_RSA = false;
-        /**
-         * Threshold length in bits of an operand after which speedup with RSA
-         * multiplication is used. Schoolbook multiplication is used for shorter
-         * operands
-         */
-        public static final short FAST_MULT_VIA_RSA_TRESHOLD_LENGTH = (short) 16;
-
-        byte[] tmp_array_short = null;
-
-        //
-        // References to underlaying shared objects
-        //
-        byte[] fnc_mult_resultArray1 = null;
-        byte[] fnc_deep_resize_tmp = null;
-        byte[] fnc_mult_resultArray2 = null;
-        byte[] fnc_same_value_array1 = null;
-        byte[] fnc_same_value_hash = null;
-        byte[] fnc_shift_bytes_right_tmp = null;
-
-        // These Bignats are just pointing to some helper_BN_? so reasonable naming is preserved yet no need to actually allocated whole Bignat object
-        Bignat fnc_mod_exp_modBN;
-
-        Bignat fnc_mod_add_tmp;
-        Bignat fnc_mod_sub_tmp;
-        Bignat fnc_mod_sub_tmpOther;
-        Bignat fnc_mod_sub_tmpThis;
-
-        Bignat fnc_mod_mult_tmpThis;
-
-        Bignat fnc_mult_mod_tmpThis;
-        Bignat fnc_mult_mod_tmp_x;
-        Bignat fnc_mult_mod_tmp_mod;
-
-        Bignat fnc_divide_tmpThis;
-
-        Bignat fnc_gcd_tmp;
-        Bignat fnc_gcd_tmpOther;
-
-        Bignat fnc_is_coprime_tmp;
-
-        Bignat fnc_exponentiation_i;
-        Bignat fnc_exponentiation_tmp;
-
-        Bignat fnc_sqrt_p_1;
-        Bignat fnc_sqrt_Q;
-        Bignat fnc_sqrt_S;
-        Bignat fnc_sqrt_tmp;
-        Bignat fnc_sqrt_exp;
-        Bignat fnc_sqrt_z;
-        Bignat fnc_sqrt_i;
-        Bignat fnc_sqrt_t;
-        Bignat fnc_sqrt_b;
-
-        Bignat fnc_mod_minus_2;
-
-        Bignat fnc_negate_tmp;
-
-        Bignat fnc_int_add_tmpMag;
-        Bignat fnc_int_multiply_mod;
-        Bignat fnc_int_multiply_tmpThis;
-        Bignat fnc_int_divide_tmpThis;
-
-        RSAPublicKey fnc_NmodE_pubKey;
-        Cipher fnc_NmodE_cipher;
-
-        public static Bignat ONE;
-        public static Bignat TWO;
-        public static Bignat THREE;
-
-
-        // Helper objects for fast multiplication of two large numbers (without modulo)
-        KeyPair fnc_mult_keypair = null;
-        RSAPublicKey fnc_mult_pubkey_pow2 = null;
-        Cipher fnc_mult_cipher = null;
         MessageDigest hashEngine;
+        KeyAgreement ecMultKA;
+        KeyAgreement ecAddKA;
+        Signature verifyEcdsa;
+        Cipher multCiph;
+        RSAPublicKey expPub;
+        RSAPrivateKey expPriv;
+        Cipher expCiph;
 
-        static byte[] CONST_ONE = {0x01};
+        byte[] ARRAY_A, ARRAY_B, POINT_ARRAY_A, POINT_ARRAY_B, HASH_ARRAY;
+        public static final byte LOCKER_ARRAYS = 5;
+        byte[] RAM_WORD; // Without lock
+
         static byte[] CONST_TWO = {0x02};
+        public static final byte LOCKER_OBJECTS = 1;
 
-        public Bignat_Helper(ResourceManager resman) {
-            super(resman);
-        }
+        BigNat BN_A, BN_B, BN_C, BN_D, BN_E, BN_F;
+        BigNat EC_BN_A, EC_BN_B, EC_BN_C, EC_BN_D, EC_BN_E, EC_BN_F;
+        public static BigNat ONE, TWO, THREE, ONE_COORD;
 
-        void initialize(short modRSAEngineMaxBits, short multRSAEngineMaxBits) {
-            MODULO_RSA_ENGINE_MAX_LENGTH_BITS = modRSAEngineMaxBits;
-            MULT_RSA_ENGINE_MAX_LENGTH_BITS = multRSAEngineMaxBits;
+        // TODO remove if possible
+        public final short MODULO_RSA_ENGINE_MAX_LENGTH_BITS;
 
-            fnc_deep_resize_tmp = rm.helper_BN_array1;
-            fnc_mult_resultArray1 = rm.helper_BN_array1;
-            fnc_mult_resultArray2 = rm.helper_BN_array2;
+        public ResourceManager(short MAX_POINT_SIZE, short MAX_COORD_SIZE, short MAX_BIGNAT_SIZE, short MULT_RSA_ENGINE_MAX_LENGTH_BITS, short MODULO_RSA_ENGINE_MAX_LENGTH_BITS) {
+            this.MODULO_RSA_ENGINE_MAX_LENGTH_BITS = MODULO_RSA_ENGINE_MAX_LENGTH_BITS;
+            // locker.setLockingActive(false); // if required, locking can be disabled
+            memAlloc = new ObjectAllocator();
+            memAlloc.setAllAllocatorsRAM();
+            // if required, memory for helper objects and arrays can be in persistent memory to save RAM (or some tradeoff)
+            // ObjectAllocator.setAllAllocatorsEEPROM();
+            // ObjectAllocator.setAllocatorsTradeoff();
 
-            fnc_same_value_array1 = rm.helper_BN_array1;
-            fnc_same_value_hash = rm.helper_BN_array2;
 
-            fnc_shift_bytes_right_tmp = rm.helper_BN_array1;
+            ARRAY_A = memAlloc.allocateByteArray((short) (MULT_RSA_ENGINE_MAX_LENGTH_BITS / 8), memAlloc.getAllocatorType(ObjectAllocator.ARRAY_A));
+            ARRAY_B = memAlloc.allocateByteArray((short) (MULT_RSA_ENGINE_MAX_LENGTH_BITS / 8), memAlloc.getAllocatorType(ObjectAllocator.ARRAY_B));
+            POINT_ARRAY_A = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.POINT_ARRAY_A));
+            POINT_ARRAY_B = memAlloc.allocateByteArray((short) (MAX_POINT_SIZE + 1), memAlloc.getAllocatorType(ObjectAllocator.POINT_ARRAY_B));
+            hashEngine = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+            HASH_ARRAY = memAlloc.allocateByteArray(hashEngine.getLength(), memAlloc.getAllocatorType(ObjectAllocator.HASH_ARRAY));
+            RAM_WORD = memAlloc.allocateByteArray((short) 2, JCSystem.MEMORY_TYPE_TRANSIENT_RESET); // only 2b RAM for faster add(short)
 
-            // BN below are just reassigned allocated helper_BN_? so that same helper_BN_? is not used in parallel (checked by lock() unlock())
-            fnc_mod_add_tmp = rm.helper_BN_A;
+            BN_A = new BigNat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BN_A), this);
+            BN_B = new BigNat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BN_B), this);
+            BN_C = new BigNat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BN_C), this);
+            BN_D = new BigNat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BN_D), this);
+            BN_E = new BigNat(MAX_BIGNAT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.BN_E), this);
+            BN_F = new BigNat((short) (MAX_BIGNAT_SIZE + 2), memAlloc.getAllocatorType(ObjectAllocator.BN_F), this); // +2 is to correct for infrequent RSA result with two or more leading zeroes
 
-            fnc_mod_sub_tmpThis = rm.helper_BN_A;
-            fnc_mod_sub_tmp = rm.helper_BN_B;
-            fnc_mod_sub_tmpOther = rm.helper_BN_C;
-
-            fnc_mult_mod_tmpThis = rm.helper_BN_A;
-            fnc_mult_mod_tmp_mod = rm.helper_BN_B;
-            fnc_mult_mod_tmp_x = rm.helper_BN_C;
-
-            fnc_exponentiation_tmp = rm.helper_BN_A;
-            fnc_exponentiation_i = rm.helper_BN_B;
-
-            fnc_mod_minus_2 = rm.helper_BN_B;
-
-            fnc_gcd_tmp = rm.helper_BN_A;
-            fnc_gcd_tmpOther = rm.helper_BN_B;
-
-            fnc_is_coprime_tmp = rm.helper_BN_C; // is_coprime calls gcd internally
-
-            fnc_negate_tmp = rm.helper_BN_B;
-
-            fnc_sqrt_S = rm.helper_BN_A;
-            fnc_sqrt_exp = rm.helper_BN_G;
-            fnc_sqrt_p_1 = rm.helper_BN_D;
-            fnc_sqrt_Q = rm.helper_BN_C;
-            fnc_sqrt_tmp = rm.helper_BN_E;
-            fnc_sqrt_z = rm.helper_BN_B;
-            fnc_sqrt_i = rm.helper_BN_G;
-            fnc_sqrt_t = rm.helper_BN_D;
-            fnc_sqrt_b = rm.helper_BN_C;
-
-            fnc_mod_mult_tmpThis = rm.helper_BN_E; // mod_mult is called from  fnc_sqrt => requires helper_BN_E not being locked in fnc_sqrt when mod_mult is called
-
-            fnc_divide_tmpThis = rm.helper_BN_E; // divide is called from  fnc_sqrt => requires helper_BN_E not being locked  in fnc_sqrt when divide is called
-
-            fnc_mod_exp_modBN = rm.helper_BN_F;  // mod_exp is called from  fnc_sqrt => requires helper_BN_F not being locked  in fnc_sqrt when mod_exp is called
-
-            fnc_int_add_tmpMag = rm.helper_BN_A;
-            fnc_int_multiply_mod = rm.helper_BN_A;
-            fnc_int_multiply_tmpThis = rm.helper_BN_B;
-            fnc_int_divide_tmpThis = rm.helper_BN_A;
-
+            EC_BN_A = new BigNat(MAX_POINT_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_A), this);
+            EC_BN_B = new BigNat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_B), this);
+            EC_BN_C = new BigNat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_C), this);
+            EC_BN_D = new BigNat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_D), this);
+            EC_BN_E = new BigNat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_E), this);
+            EC_BN_F = new BigNat(MAX_COORD_SIZE, memAlloc.getAllocatorType(ObjectAllocator.EC_BN_F), this);
 
             // Allocate BN constants always in EEPROM (only reading)
-            ONE = new Bignat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
+            ONE = new BigNat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
             ONE.one();
-            TWO = new Bignat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
+            TWO = new BigNat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
             TWO.two();
-            THREE = new Bignat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
+            THREE = new BigNat((short) 1, JCSystem.MEMORY_TYPE_PERSISTENT, this);
             THREE.three();
+            ONE_COORD = new BigNat(MAX_COORD_SIZE, JCSystem.MEMORY_TYPE_PERSISTENT, this);
+            ONE_COORD.one();
 
-            tmp_array_short = rm.memAlloc.allocateByteArray((short) 2, JCSystem.MEMORY_TYPE_TRANSIENT_RESET); // only 2b RAM for faster add(short)
-            fnc_NmodE_cipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
-            fnc_NmodE_pubKey = (RSAPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PUBLIC, MODULO_RSA_ENGINE_MAX_LENGTH_BITS, false);
+            // ECC Helpers
+            if (OperationSupport.getInstance().EC_HW_XY) {
+                // ecMultKA = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN_XY, false);
+                ecMultKA = KeyAgreement.getInstance((byte) 6, false);
+            } else if (OperationSupport.getInstance().EC_HW_X) {
+                // ecMultKA = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN, false);
+                ecMultKA = KeyAgreement.getInstance((byte) 3, false);
+            }
+            // verifyEcdsa = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+            verifyEcdsa = Signature.getInstance((byte) 33, false);
+            if (OperationSupport.getInstance().EC_HW_ADD) {
+                // ecAddKA = KeyAgreement.getInstance(KeyAgreement.ALG_EC_PACE_GM, false);
+                ecAddKA = KeyAgreement.getInstance((byte) 5, false);
+            }
 
-            // Speedup for fast multiplication
-            fnc_mult_keypair = new KeyPair(KeyPair.ALG_RSA_CRT, MULT_RSA_ENGINE_MAX_LENGTH_BITS);
-            fnc_mult_keypair.genKeyPair();
-            fnc_mult_pubkey_pow2 = (RSAPublicKey) fnc_mult_keypair.getPublic();
-            //mult_privkey_pow2 = (RSAPrivateCrtKey) mult_keypair.getPrivate();
-            fnc_mult_pubkey_pow2.setExponent(CONST_TWO, (short) 0, (short) CONST_TWO.length);
-            fnc_mult_cipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
+            // RSA Mult Helpers
+            KeyPair multKP = new KeyPair(KeyPair.ALG_RSA_CRT, MULT_RSA_ENGINE_MAX_LENGTH_BITS);
+            multKP.genKeyPair();
+            RSAPublicKey multPK = (RSAPublicKey) multKP.getPublic();
+            multPK.setExponent(CONST_TWO, (short) 0, (short) CONST_TWO.length);
+            multCiph = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
+            multCiph.init(multPK, Cipher.MODE_ENCRYPT);
 
-            hashEngine = rm.hashEngine;
-
-            FLAG_FAST_MULT_VIA_RSA = false; // set true only if succesfully allocated and tested below
-            try { // Subsequent code may fail on some real (e.g., Infineon CJTOP80K) cards - catch exception
-                fnc_mult_cipher.init(fnc_mult_pubkey_pow2, Cipher.MODE_ENCRYPT);
-                // Try operation - if doesn't work, exception SW_CANTALLOCATE_BIGNAT is emitted
-                Util.arrayFillNonAtomic(fnc_mult_resultArray1, (short) 0, (short) fnc_mult_resultArray1.length, (byte) 6);
-                fnc_mult_cipher.doFinal(fnc_mult_resultArray1, (short) 0, (short) fnc_mult_resultArray1.length, fnc_mult_resultArray1, (short) 0);
-                FLAG_FAST_MULT_VIA_RSA = true;
-            } catch (Exception ignored) {
-            } // discard exception
-        }
-
-        /**
-         * Erase all values stored in helper objects
-         */
-        void erase() {
-            rm.erase();
-            Util.arrayFillNonAtomic(tmp_array_short, (short) 0, (short) tmp_array_short.length, (byte) 0);
+            // RSA Exp Helpers
+            expPub = (RSAPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PUBLIC, MODULO_RSA_ENGINE_MAX_LENGTH_BITS, false);
+            expPriv = (RSAPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_RSA_PRIVATE, MODULO_RSA_ENGINE_MAX_LENGTH_BITS, false);
+            expCiph = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
         }
     }
 
-    /**
-     *
-     * @author Vasilios Mavroudis and Petr Svenda
-     */
-    static class ObjectLocker {
-        /**
-         * Configuration flag controlling clearing of shared objects on lock as
-         * prevention of unwanted leak of sensitive information from previous
-         * operation. If true, object is erased once locked for use
-         */
-        private boolean ERASE_ON_LOCK = false;
-        /**
-         * Configuration flag controlling clearing of shared objects on lock as
-         * prevention of unwanted leak of sensitive information to next
-         * operation. If true, object is erased once unlocked from use
-         */
-        private boolean ERASE_ON_UNLOCK = false;
+    public static class SecP256k1 {
 
-        /**
-         * Configuration flag controlling clearing of shared objects on lock as
-         * prevention of unwanted leak of sensitive information to next operation.
-         * If true, object is erased once unlocked from use
-         */
-        private boolean PROFILE_LOCKED_OBJECTS = false;
-        /**
-         * Array of pointers to objects which will be guarded by locks.
-         * Every even value contains pointer to registered object. Subsequent index
-         * contains null if not locked, !null if locked,
-         * Stored in RAM for fast access.
-         */
-        private Object[] lockedObjects;
-        /**
-         * Copy of pointers to objects from lockedObjects in persistent memory to refresh after card reset.
-         * Refreshed by call {@code refreshAfterReset()}
-         */
-        private Object[] lockedObjectsPersistent;
+        public final static short KEY_LENGTH = 256; // Bits
+        public final static short POINT_SIZE = 65; // Bytes
+        public final static short COORD_SIZE = 32; // Bytes
 
-        /**
-         * Array to hold state of lock for all other objects implemented as N x N array [0...N-1][N...2N-1]...[]
-         * where [0...N-1] contains the states of lock for all other objects than first object (lockedObjects[0]).
-         * If no other object is locked after series of operations, [0...N-1] will contain 0 on all indexes.
-         * All objects (lockedObjects[i]) which happened to be locked together with have 1 at [0...i...N-1].
-         */
-        public byte[] profileLockedObjects;
-        /**
-         * If true, locking is performed, otherwise relevant method just return without any operation performed
-         */
-        private boolean bLockingActive = true;
+        public final static byte[] p = {
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
+                (byte) 0xff, (byte) 0xff, (byte) 0xfc, (byte) 0x2f
+        };
 
-        public ObjectLocker(short numArrays) {
-            initialize(numArrays, ERASE_ON_LOCK, ERASE_ON_UNLOCK);
-        }
-        public ObjectLocker(short numArrays, boolean bEraseOnLock, boolean bEraseOnUnlock) {
-            initialize(numArrays, bEraseOnLock, bEraseOnUnlock);
-        }
-        private final void initialize(short numObjects, boolean bEraseOnLock, boolean bEraseOnUnlock) {
-            lockedObjects = JCSystem.makeTransientObjectArray((short) (2 * numObjects), JCSystem.CLEAR_ON_RESET);
-            lockedObjectsPersistent = new Object[(short) (2 * numObjects)];
-            ERASE_ON_LOCK = bEraseOnLock;
-            ERASE_ON_UNLOCK = bEraseOnUnlock;
-            profileLockedObjects = new byte[(short) (numObjects * numObjects)];
-            resetProfileLocks();
-        }
+        public final static byte[] a = {
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00
+        };
 
-        /**
-         * Reset profile array with profile locks statistics.
-         */
-        public void resetProfileLocks() {
-            Util.arrayFillNonAtomic(profileLockedObjects, (short) 0, (short) profileLockedObjects.length, (byte) 0);
-        }
+        public final static byte[] b = {
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x07
+        };
 
-        /**
-         * Register new object for lock guarding.
-         * @param objToLock object to be guarded
-         * @return index to internal array where registered object is stored (if known, lock/unlock is faster)
-         */
-        public short registerLock(Object objToLock) {
-            short i;
-            for (i = 0; i < (short) lockedObjects.length; i += 2) {
-                if (lockedObjects[i] == null) {
-                    // Free slot found
-                    lockedObjects[i] = objToLock;
-                    lockedObjects[(short) (i + 1)] = null; // null means array is unlocked
-                    lockedObjectsPersistent[i] = objToLock; // Store same into persistent array as well
-                    lockedObjectsPersistent[(short) (i + 1)] = null;
-                    return i; // Return index for potential speedup of locking
-                }
-            }
-            ISOException.throwIt(ReturnCodes.SW_LOCK_NOFREESLOT);
-            return -1;
-        }
-        /**
-         * Locking array (placed in RAM) must be refreshed after card reset. Call this method during select()
-         */
-        public void refreshAfterReset() {
-            for (short i = 0; i < (short) lockedObjects.length; i++) {
-                lockedObjects[i] = lockedObjectsPersistent[i];
-            }
-        }
+        public final static byte[] G = {
+                (byte) 0x04,
+                (byte) 0x79, (byte) 0xbe, (byte) 0x66, (byte) 0x7e,
+                (byte) 0xf9, (byte) 0xdc, (byte) 0xbb, (byte) 0xac,
+                (byte) 0x55, (byte) 0xa0, (byte) 0x62, (byte) 0x95,
+                (byte) 0xce, (byte) 0x87, (byte) 0x0b, (byte) 0x07,
+                (byte) 0x02, (byte) 0x9b, (byte) 0xfc, (byte) 0xdb,
+                (byte) 0x2d, (byte) 0xce, (byte) 0x28, (byte) 0xd9,
+                (byte) 0x59, (byte) 0xf2, (byte) 0x81, (byte) 0x5b,
+                (byte) 0x16, (byte) 0xf8, (byte) 0x17, (byte) 0x98,
+                (byte) 0x48, (byte) 0x3a, (byte) 0xda, (byte) 0x77,
+                (byte) 0x26, (byte) 0xa3, (byte) 0xc4, (byte) 0x65,
+                (byte) 0x5d, (byte) 0xa4, (byte) 0xfb, (byte) 0xfc,
+                (byte) 0x0e, (byte) 0x11, (byte) 0x08, (byte) 0xa8,
+                (byte) 0xfd, (byte) 0x17, (byte) 0xb4, (byte) 0x48,
+                (byte) 0xa6, (byte) 0x85, (byte) 0x54, (byte) 0x19,
+                (byte) 0x9c, (byte) 0x47, (byte) 0xd0, (byte) 0x8f,
+                (byte) 0xfb, (byte) 0x10, (byte) 0xd4, (byte) 0xb8
+        };
 
-        /**
-         * Controls if locking and unlocking is actually performed. The lock operations
-         * add some overhead, so it may be turned on/off as required. E.g., when developing
-         * new code or like to enjoy protection of automatic clearing of shared objects before/after lock
-         * enable this feature.
-         * @param bLockActive if true, locking and unlocking is performed. If false, lock/unlock methods will return without any effect
-         */
-        public void setLockingActive(boolean bLockActive) {
-            bLockingActive = bLockActive;
-        }
-        /**
-         * Lock/reserve provided object for subsequent use. Used to protect corruption
-         * of pre-allocated shared objects in different, potentially nested,
-         * operations. Must be unlocked later on.
-         *
-         * @param objToLock array to be locked
-         * @throws SW_ALREADYLOCKED if already locked (is already in use by
-         * other operation)
-         */
-        public void lock(Object objToLock) {
-            if (!bLockingActive) {
-                return;
-            }
-            // Find object to lock
-            short i;
-            for (i = 0; i < (short) lockedObjects.length; i += 2) {
-                if (lockedObjects[i] != null && lockedObjects[i].equals(objToLock)) {
-                    lock(objToLock, i);
-                    break;
-                }
-            }
-            // If reached here, required array was not found
-            if (i == (short) lockedObjects.length) {
-                // ISOException.throwIt(ReturnCodes.SW_LOCK_OBJECT_NOT_FOUND);
-            }
-        }
-        public void lock(byte[] objToLock) {
-            if (!bLockingActive) {
-                return;
-            }
-            lock((Object) objToLock);
-            if (ERASE_ON_LOCK) {
-                Util.arrayFillNonAtomic(objToLock, (short) 0, (short) objToLock.length, (byte) 0);
-            }
-        }
-        /**
-         * Unlock/release object from use. Used to protect corruption of
-         * pre-allocated objects used in different nested operations. Must
-         * be locked before.
-         *
-         * @param objToUnlock object to unlock
-         * @throws SW_NOTLOCKED_BIGNAT if was not locked before (inconsistence in
-         * lock/unlock sequence)
-         */
-
-        public void unlock(Object objToUnlock) {
-            if (!bLockingActive) {
-                return;
-            }
-            // Find object to unlock
-            short i;
-            for (i = 0; i < (short) lockedObjects.length; i += 2) {
-                if (lockedObjects[i] != null && lockedObjects[i].equals(objToUnlock)) {
-                    unlock(objToUnlock, i);
-                    break;
-                }
-            }
-            // If reached here, required array was not found
-            if (i == (short) lockedObjects.length) {
-                // ISOException.throwIt(ReturnCodes.SW_LOCK_OBJECT_NOT_FOUND);
-            }
-        }
-
-        public void unlock(byte[] objToUnlock) {
-            if (!bLockingActive) {
-                return;
-            }
-            unlock((Object) objToUnlock);
-            if (ERASE_ON_UNLOCK) {
-                Util.arrayFillNonAtomic(objToUnlock, (short) 0, (short) objToUnlock.length, (byte) 0);
-            }
-        }
-
-        /**
-         * Unlocks all locked objects
-         */
-        public void unlockAll() {
-            if (!bLockingActive) {
-                return;
-            }
-            for (short i = 0; i < (short) lockedObjects.length; i += 2) {
-                lockedObjects[(short) (i + 1)] = null;
-            }
-        }
-
-        /**
-         * Check if provided object is logically locked
-         * @param objToUnlock object to be checked
-         * @return true of array is logically locked, false otherwise
-         */
-
-        public boolean isLocked(Object objToUnlock) {
-            if (!bLockingActive) {
-                return false;
-            }
-            // Find object to unlock
-            short i;
-            for (i = 0; i < (short) lockedObjects.length; i += 2) {
-                if (lockedObjects[i] != null && lockedObjects[i].equals(objToUnlock)) {
-                    return lockedObjects[(short) (i + 1)] != null;
-                }
-            }
-            // If reached here, required object was not found
-            if (i == (short) lockedObjects.length) {
-                // ISOException.throwIt(ReturnCodes.SW_LOCK_OBJECT_NOT_FOUND);
-            }
-            return false;
-        }
-
-
-        private void lock(Object objToLock, short lockIndex) {
-            if (lockedObjects[lockIndex] != null && !lockedObjects[lockIndex].equals(objToLock)) {
-                ISOException.throwIt(ReturnCodes.SW_LOCK_OBJECT_MISMATCH);
-            }
-            // Next position in array signalizes logical lock (null == unlocked, !null == locked)
-            if (lockedObjects[(short) (lockIndex + 1)] == null) {
-                lockedObjects[(short) (lockIndex + 1)] = objToLock; // lock logically by assigning object reference to [i + 1]
-            } else {
-                // this array is already locked, raise exception (incorrect sequence of locking and unlocking)
-                ISOException.throwIt(ReturnCodes.SW_LOCK_ALREADYLOCKED);
-            }
-            if (PROFILE_LOCKED_OBJECTS) {
-                // If enabled, check status of all other objects and mark these that are currently locked
-                short profileLockOffset = (short) ((short) (lockIndex / 2) * (short) ((short) lockedObjects.length / 2)); // Obtain section of profileLockedObjects array relevant for current object
-
-                for (short i = 0; i < (short) lockedObjects.length; i += 2) {
-                    if (lockedObjects[(short) (i + 1)] != null) {
-                        // Object at index i is locked, mark it to corresponding position in profileLockedObjects by setting value to 1
-                        profileLockedObjects[(short) (profileLockOffset + (short) (i / 2))] = 1;
-                    }
-                }
-            }
-        }
-
-        private void unlock(Object objToUnlock, short lockIndex) {
-            if (lockedObjects[lockIndex] != null && !lockedObjects[lockIndex].equals(objToUnlock)) {
-                ISOException.throwIt(ReturnCodes.SW_LOCK_OBJECT_MISMATCH);
-            }
-            // Next position in array signalizes logical lock (null == unlocked, !null == locked)
-            if (lockedObjects[(short) (lockIndex + 1)].equals(objToUnlock)) {
-                lockedObjects[(short) (lockIndex + 1)] = null; // lock logically by assigning object reference to [i + 1]
-            } else {
-                // this array is not locked, raise exception (incorrect sequence of locking and unlocking)
-                ISOException.throwIt(ReturnCodes.SW_LOCK_NOTLOCKED);
-            }
-        }
+        public final static byte[] r = {
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xfe,
+                (byte) 0xba, (byte) 0xae, (byte) 0xdc, (byte) 0xe6,
+                (byte) 0xaf, (byte) 0x48, (byte) 0xa0, (byte) 0x3b,
+                (byte) 0xbf, (byte) 0xd2, (byte) 0x5e, (byte) 0x8c,
+                (byte) 0xd0, (byte) 0x36, (byte) 0x41, (byte) 0x41,
+        };
     }
 
 
@@ -4083,35 +2758,32 @@ public class jcmathlib {
      * specification of allocator type (RAM/EEPROM) for particular array. Allows for
      * quick personalization and optimization of memory use when compiling for cards
      * with more/less available memory.
-     *
-     * @author Petr Svenda
      */
-    static class ObjectAllocator {
+    public static class ObjectAllocator {
         short allocatedInRAM = 0;
         short allocatedInEEPROM = 0;
-        byte[] ALLOCATOR_TYPE_ARRAY = null;
+        byte[] ALLOCATOR_TYPE_ARRAY;
 
-        public static final byte BNH_helper_BN_array1    = 0;
-        public static final byte BNH_helper_BN_array2    = 1;
-        public static final byte BNH_helper_BN_A         = 2;
-        public static final byte BNH_helper_BN_B         = 3;
-        public static final byte BNH_helper_BN_C         = 4;
-        public static final byte BNH_helper_BN_D         = 5;
-        public static final byte BNH_helper_BN_E         = 6;
-        public static final byte BNH_helper_BN_F         = 7;
-        public static final byte BNH_helper_BN_G         = 8;
+        public static final byte ARRAY_A = 0;
+        public static final byte ARRAY_B = 1;
+        public static final byte BN_A = 2;
+        public static final byte BN_B = 3;
+        public static final byte BN_C = 4;
+        public static final byte BN_D = 5;
+        public static final byte BN_E = 6;
+        public static final byte BN_F = 7;
 
-        public static final byte ECPH_helperEC_BN_A      = 9;
-        public static final byte ECPH_helperEC_BN_B      = 10;
-        public static final byte ECPH_helperEC_BN_C      = 11;
-        public static final byte ECPH_helperEC_BN_D      = 12;
-        public static final byte ECPH_helperEC_BN_E      = 13;
-        public static final byte ECPH_helperEC_BN_F      = 14;
-        public static final byte ECPH_uncompressed_point_arr1 = 15;
-        public static final byte ECPH_uncompressed_point_arr2 = 16;
-        public static final byte ECPH_hashArray          = 17;
+        public static final byte EC_BN_A = 8;
+        public static final byte EC_BN_B = 9;
+        public static final byte EC_BN_C = 10;
+        public static final byte EC_BN_D = 11;
+        public static final byte EC_BN_E = 12;
+        public static final byte EC_BN_F = 13;
+        public static final byte POINT_ARRAY_A = 14;
+        public static final byte POINT_ARRAY_B = 15;
+        public static final byte HASH_ARRAY = 16;
 
-        public static final short ALLOCATOR_TYPE_ARRAY_LENGTH = (short) (ECPH_hashArray + 1);
+        public static final short ALLOCATOR_TYPE_ARRAY_LENGTH = (short) (HASH_ARRAY + 1);
 
         /**
          * Creates new allocator control object, resets performance counters
@@ -4142,18 +2814,18 @@ public class jcmathlib {
             setAllAllocatorsEEPROM();
 
             // Put only the most perfromance relevant ones into RAM
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_array1] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_array2] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_A] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_C] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_D] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_E] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_F] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[BNH_helper_BN_G] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[ECPH_helperEC_BN_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[ECPH_helperEC_BN_C] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
-            ALLOCATOR_TYPE_ARRAY[ECPH_uncompressed_point_arr1] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[ARRAY_A] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[ARRAY_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_A] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_C] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_D] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_E] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[BN_F] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[EC_BN_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[EC_BN_C] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[POINT_ARRAY_A] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
+            ALLOCATOR_TYPE_ARRAY[POINT_ARRAY_B] = JCSystem.MEMORY_TYPE_TRANSIENT_RESET;
         }
 
         /**
@@ -4194,22 +2866,6 @@ public class jcmathlib {
         }
 
         /**
-         * Returns number of bytes allocated in RAM via {@code allocateByteArray()} since last reset of counters.
-         * @return number of bytes allocated in RAM via this control object
-         */
-        public short getAllocatedInRAM() {
-            return allocatedInRAM;
-        }
-        /**
-         * Returns number of bytes allocated in EEPROM via {@code allocateByteArray()}
-         * since last reset of counters.
-         *
-         * @return number of bytes allocated in EEPROM via this control object
-         */
-        public short getAllocatedInEEPROM() {
-            return allocatedInEEPROM;
-        }
-        /**
          * Resets counters of allocated bytes in RAM and EEPROM
          */
         public final void resetAllocatorCounters() {
@@ -4218,61 +2874,4 @@ public class jcmathlib {
         }
     }
 
-    /**
-     * OperationSupport class
-     *
-     * @author Antonin Dufka
-     */
-    static class OperationSupport {
-        private static OperationSupport instance;
-
-        public static final short SIMULATOR = (short) 0x0000;
-        public static final short J2E145G = 0x0001;
-        public static final short J3H145 = 0x0002;
-        public static final short J3R180 = 0x0003;
-
-        public boolean PRECISE_CURVE_BITLENGTH = true;
-        public boolean RSA_MULT_TRICK = false;
-        public boolean RSA_MOD_EXP = true;
-        public boolean RSA_PREPEND_ZEROS = false;
-        public boolean RSA_KEY_REFRESH = false;
-        public boolean ECDH_X_ONLY = true;
-        public boolean ECDH_XY = false;
-
-        private OperationSupport() {}
-
-        public static OperationSupport getInstance() {
-            if (OperationSupport.instance == null)
-                OperationSupport.instance = new OperationSupport();
-            return OperationSupport.instance;
-        }
-
-        public void setCard(short card_identifier) {
-            switch (card_identifier) {
-                case SIMULATOR:
-                    PRECISE_CURVE_BITLENGTH = false;
-                    RSA_MULT_TRICK = false;
-                    RSA_PREPEND_ZEROS = true;
-                    RSA_KEY_REFRESH = true;
-                    ECDH_XY = true;
-                    break;
-                case J2E145G:
-                    RSA_MULT_TRICK = true;
-                    break;
-                case J3H145:
-                    RSA_MULT_TRICK = true;
-                    RSA_MOD_EXP = false;
-                    ECDH_XY = true;
-                    break;
-                case J3R180:
-                    RSA_MULT_TRICK = true;
-                    RSA_MOD_EXP = false;
-                    ECDH_XY = true;
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
 }
-

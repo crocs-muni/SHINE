@@ -41,7 +41,7 @@ repositories {
 
 // Dependencies for your project
 dependencies {
-    jcardsim 'com.klinec:jcardsim:3.0.5.11'
+    jcardsim 'com.klinec:jcardsim:3.0.6.0'
 
     testImplementation 'org.testng:testng:6.1.1'
     testImplementation 'org.slf4j:slf4j-api:1.7.33'
@@ -49,13 +49,13 @@ dependencies {
     testImplementation 'org.apache.logging.log4j:log4j-core:2.17.2'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.1.1'
-    testImplementation 'org.bouncycastle:bcprov-jdk15to18:1.68'
+    testImplementation 'org.bouncycastle:bcprov-jdk15to18:1.69'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.1.1'
 
     testImplementation(group: 'com.klinec', name: 'javacard-tools', version: '1.0.4') {
         exclude group: "com.klinec", module: "jcardsim"
     }
-    
+
     // Include plugin as it has bundled GP & other tools.
     // Alternative: include GP manually, but the included
     // version has to be compatible with the plugin.
@@ -105,7 +105,7 @@ final def JC310b43 = libsSdk + '/jc310b43_kit'
 //
 // JC310b43 supports building also for lower versions (cap.targetsdk).
 // If another SDK is selected, please comment the cap.targetsdk setting.
-final def JC_SELECTED = JC303
+final def JC_SELECTED = JC310b43
 
 javacard {
 
@@ -130,7 +130,7 @@ javacard {
             // Here you can specify path to the SDK you want to use.
             // Only JC304 and higher are supported for targeting.
             // If JC310b43 is not used, targetsdk cannot be set.
-            // targetsdk JC304
+            targetsdk JC305
 
             // Override java bytecode version if needed.
             // javaversion '1.7'
