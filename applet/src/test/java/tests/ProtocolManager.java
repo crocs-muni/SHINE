@@ -70,7 +70,7 @@ public class ProtocolManager {
     public ECPoint keygenReveal() throws Exception {
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_KEYGEN_REVEAL, 0, 0);
         lastOperationTime = cm.getLastTransmitTime();
-        checkLength(resp, SecP256k1.POINT_SIZE);
+        checkLength(resp, SecP256k1.p.length * 2 + 1);
         return curve.decodePoint(resp.getData());
     }
 
@@ -83,7 +83,7 @@ public class ProtocolManager {
     public ECPoint keygenFinalize() throws Exception {
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, Consts.INS_KEYGEN_FINALIZE, 0, 0);
         lastOperationTime = cm.getLastTransmitTime();
-        checkLength(resp, SecP256k1.POINT_SIZE);
+        checkLength(resp, SecP256k1.p.length * 2 + 1);
         return curve.decodePoint(resp.getData());
     }
 
@@ -109,9 +109,9 @@ public class ProtocolManager {
     }
 
     public BigInteger sign(int counter, ECPoint groupNonce, byte[] message, boolean bip) throws Exception {
-        byte[] data = new byte[SecP256k1.POINT_SIZE + message.length];
-        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.POINT_SIZE);
-        System.arraycopy(message, 0, data, SecP256k1.POINT_SIZE, message.length);
+        byte[] data = new byte[SecP256k1.p.length * 2 + 1 + message.length];
+        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.p.length * 2 + 1);
+        System.arraycopy(message, 0, data, SecP256k1.p.length * 2 + 1, message.length);
 
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP : Consts.INS_SIGN, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
@@ -120,9 +120,9 @@ public class ProtocolManager {
     }
 
     public BigInteger signReveal(int counter, ECPoint groupNonce, byte[] message, byte[] keyBuffer, boolean bip) throws Exception {
-        byte[] data = new byte[SecP256k1.POINT_SIZE + message.length];
-        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.POINT_SIZE);
-        System.arraycopy(message, 0, data, SecP256k1.POINT_SIZE, message.length);
+        byte[] data = new byte[SecP256k1.p.length * 2 + 1 + message.length];
+        System.arraycopy(groupNonce.getEncoded(false), 0, data, 0, SecP256k1.p.length * 2 + 1);
+        System.arraycopy(message, 0, data, SecP256k1.p.length * 2 + 1, message.length);
 
         ResponseAPDU resp = sendAPDU(Consts.CLA_SHINE, bip ? Consts.INS_SIGN_BIP_REVEAL : Consts.INS_SIGN_REVEAL, counter & 0xff, (counter >> 8) & 0xff, data);
         lastOperationTime = cm.getLastTransmitTime();
